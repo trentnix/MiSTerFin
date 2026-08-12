@@ -25,6 +25,36 @@ typedef struct {
      * line_double == 0. */
     int      phys_height;
     int      line_double;
+    /* line_double is pure GEOMETRY: any 576/480-line canvas gets the
+     * halved-UI treatment above, whether it's the interlaced core's raster
+     * or a plain progressive HDMI mode (video_mode=2/3/6) that happens to
+     * have the same line count — the tuned 288/240 layout, the 2x mplayer
+     * fonts, all of it is right for both. This flag is the part that is
+     * NOT shared: the interlaced core's raster crops ~40 rows at the top
+     * (play() shifts video down to compensate) and needs the hardware
+     * page-flip machinery (Main_MiSTer SIGSTOPped, raw SPI flips) — all
+     * wrong on a progressive HDMI canvas, confirmed on an HDMI TV as video
+     * visibly pushed down. Set only when the 576/480 geometry engaged AND
+     * MiSTer.ini carries an analog output flag the interlaced core can't
+     * run without — see mister_ini_has_analog_video in fb.c. */
+    int      interlaced_core;
+    /* HDMI-canvas UI upscale (ui_scaled=1): a canvas bigger than the
+     * classic 640x480 window (a 720p/1080p HDMI mode — no CRT-tuning
+     * [Menu] override in MiSTer.ini) renders the UI at the tuned PAL
+     * 640x288 layout (width/height above) and fb_flip nearest-neighbor
+     * scales it into a centered 4:3 box filling the real canvas's height —
+     * the vertical stretch reproduces the CRT look (par 5/3 exactly, same
+     * as PAL) instead of the "small squished text in the top-left corner"
+     * a plain clamp gave. real_width/real_height keep the true /dev/fb0
+     * size fb_flip scales into; phys_height stays clamped to 480 so
+     * mplayer's -vf chain keeps targeting a 4:3 640x480 window, which
+     * play() centers via -geometry (vo_fbdev anchors at (0,0) otherwise).
+     * Kept at 640x480 rather than the UI's own box deliberately: scaling
+     * video to the box was tried and the swscale/write load visibly outran
+     * the CPU. When ui_scaled is 0, real_width/real_height simply equal
+     * width/phys_height. */
+    int      ui_scaled;
+    int      real_width, real_height;
 } FBDev;
 
 /* Opens the real fbdev at `path`, UNLESS the MISTERFIN_FB environment
@@ -69,6 +99,12 @@ void fb_sync_back(FBDev *fb);
  * through the line doubling, so probing code can compare what it drew
  * against what is actually displayed without knowing the physical layout. */
 uint8_t *fb_mem_row(FBDev *fb, int y);
+
+/* The centered 4:3 box the ui_scaled UI occupies within the real canvas
+ * (see fb.h's ui_scaled comment) — play() points mplayer's dsize/-geometry
+ * at the same box so video and UI share one screen area. Well-defined only
+ * when ui_scaled is set. */
+void fb_ui_box(const FBDev *fb, int *bx, int *by, int *bw, int *bh);
 
 /* Repoints the MiSTer scaler at framebuffer page 0 (the Linux fb this app
  * draws) or page 1 (the video player's flip page) — latched by the FPGA at

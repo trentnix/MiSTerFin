@@ -173,10 +173,21 @@ int draw_wrapped(FBDev *fb, int x, int y, const char *text,
  * any active-line count (PAL 288, NTSC 240, ...) instead of only the one
  * resolution it happened to be tuned against. At fb->height=288 this comes
  * out to exactly 5/3 — this platform's proven PAL correction factor
- * (confirmed unchanged: was hardcoded 5.0/3.0 before this generalization). */
+ * (confirmed unchanged: was hardcoded 5.0/3.0 before this generalization).
+ *
+ * The 4:3-display assumption only holds for the CRT-class modes, which all
+ * have fewer than 360 logical lines (288/240 layouts, including the
+ * line-doubled 576/480 rasters those become). Anything taller is one of
+ * MiSTer's standard square-pixel HDMI canvases — 640x360 (720p at
+ * fb_size=2), 800x600, the 640x480 window clamped out of a 720p/1080p
+ * canvas — where no correction is needed. For the 4:3 ones among those
+ * (600-line, the 480 window) the old formula already computed 1.0, so this
+ * gate only actually changes the 16:9 canvases it was wrong on. */
 double par_correction(FBDev *fb)
 {
-    return (3.0 * fb->width) / (4.0 * fb->height);
+    if (fb->height < 360)
+        return (3.0 * fb->width) / (4.0 * fb->height);
+    return 1.0;
 }
 
 /* Blits src into a max_w x max_h box, preserving its own real-world aspect

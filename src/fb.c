@@ -118,17 +118,38 @@ static int fb_open_headless(FBDev *fb, const char *spec)
     }
 
     fb->fd          = -1;
+    fb->stride      = w * 4;      /* real per-row bytes — see fb_open's HDMI-canvas comment */
+    fb->n_pages     = 1;
+    fb->headless    = 1;
+    fb->line_double = 0;
+    fb->interlaced_core = 0;
+
+    /* Same HDMI-canvas UI upscale as fb_open's real-hardware path, so a
+     * large or 16:9 MISTERFIN_FB (e.g. 1280x720 or 640x360, simulating an
+     * HDMI-native canvas) exercises the exact behavior real hardware gets
+     * instead of silently testing something else. */
+    fb->real_width  = w;
+    fb->real_height = h;
+    fb->ui_scaled   = 0;
     fb->width       = w;
     fb->height      = h;
     fb->phys_height = h;
-    fb->line_double = 0;
-    fb->stride      = w * 4;
-    fb->n_pages     = 1;
-    fb->mmap_size   = (size_t)fb->stride * fb->height;
-    fb->headless    = 1;
+    /* Same CRT-class guard as the real path: sub-360-line canvases are
+     * wide in raw pixels because their pixels are tall, not because they
+     * are 16:9. */
+    if (w > 640 || h > 480 || (h >= 360 && 3 * w > 4 * h)) {
+        int bx, by, bw, bh;
+        fb->ui_scaled = 1;   /* before fb_ui_box — it reads real_* only */
+        fb_ui_box(fb, &bx, &by, &bw, &bh);
+        if (bw >= 640) { fb->width = 640; fb->height = 288; }
+        else           { fb->width = bw;  fb->height = bh * 2 / 3; }
+        fb->phys_height = bh < 480 ? bh : 480;
+    }
+
+    fb->mmap_size   = (size_t)fb->stride * h;   /* mimics the real physical canvas size */
 
     fb->mem  = (uint8_t *)calloc(1, fb->mmap_size);
-    fb->back = (uint8_t *)calloc(1, fb->mmap_size);
+    fb->back = (uint8_t *)calloc(1, (size_t)fb->stride * fb->height);
     if (!fb->mem || !fb->back) {
         free(fb->mem); free(fb->back);
         fb->mem = fb->back = NULL;
@@ -150,8 +171,49 @@ static void fb_dump_frame(const FBDev *fb)
     if (!out || !*out) return;
     FILE *f = fopen(out, "wb");
     if (!f) return;
-    fwrite(fb->mem, 1, (size_t)fb->stride * fb->height, f);
+    /* real_height, not height: under the HDMI-canvas UI upscale the visible
+     * content spans the full real canvas (headless never line-doubles, the
+     * one other case where the two differ). */
+    fwrite(fb->mem, 1, (size_t)fb->stride * fb->real_height, f);
     fclose(f);
+}
+
+/* Decides FBDev.interlaced_core (see fb.h): a plain progressive HDMI mode
+ * (video_mode=2/3/6 — 720x576, 720x480, 640x480) reports the exact same
+ * line count as the interlaced core's raster, but scans out every row with
+ * nothing cropped — so the raster-crop compensation and page-flip machinery
+ * keyed off interlaced_core are wrong there, confirmed on an HDMI TV as
+ * video pushed down by a crop offset only the real interlaced raster has.
+ *
+ * The interlaced core cannot produce its raster without an analog output
+ * flag in MiSTer.ini — forced_scandoubler for SCART/RGB (the standalone
+ * core falls back to 240p without it, see docs/DISPLAY_COMPATIBILITY.md),
+ * direct_video/direct_video_interlace for the HDMI-DAC route, vga_scaler
+ * for a scaler-fed CRT — so if NONE of them is set anywhere in the file,
+ * a 480/576-line canvas must be progressive. Scanned across all sections
+ * deliberately, and unreadable-file errs on the interlaced side: every
+ * confirmed CRT setup predates this check and keeps its exact known-good
+ * behavior on any ambiguity. */
+static int mister_ini_has_analog_video(void)
+{
+    FILE *f = fopen("/media/fat/MiSTer.ini", "r");
+    if (!f) return 1;
+
+    static const char *const keys[] = {
+        "forced_scandoubler", "direct_video_interlace", "direct_video",
+        "vga_scaler", NULL
+    };
+    char line[256];
+    int found = 0;
+    while (!found && fgets(line, sizeof(line), f)) {
+        for (int i = 0; keys[i]; i++) {
+            size_t kl = strlen(keys[i]);
+            if (strncmp(line, keys[i], kl) == 0 && line[kl] == '=' &&
+                atoi(line + kl + 1) != 0) { found = 1; break; }
+        }
+    }
+    fclose(f);
+    return found;
 }
 
 int fb_open(FBDev *fb, const char *path)
@@ -188,16 +250,21 @@ int fb_open(FBDev *fb, const char *path)
        mplayer's fbdev driver can page-flip via FBIOPAN_DISPLAY */
     fb->n_pages = 1;  /* always single — writing to page 1 corrupts mplayer's back buffer */
 
-    /* Interlaced full-frame raster (see fb.h): 576/480 lines are exactly
-     * double the 288/240 layouts the UI is tuned for — halve the logical
-     * height and let fb_flip line-double, instead of teaching every draw
-     * call a second geometry. Only these two exact heights: anything else
-     * is an unknown mode better rendered 1:1 than half-guessed. */
-    fb->phys_height = fb->height;
-    fb->line_double = 0;
+    /* Full-frame 576/480-line raster (see fb.h): exactly double the 288/240
+     * layouts the UI is tuned for — halve the logical height and let
+     * fb_flip line-double, instead of teaching every draw call a second
+     * geometry. Pure geometry, applied whether the canvas belongs to the
+     * interlaced core or a progressive HDMI mode with the same line count;
+     * the ini check only decides interlaced_core, the flag for what the
+     * two do NOT share (see fb.h). Only these two exact heights: anything
+     * else is an unknown mode better rendered 1:1 than half-guessed. */
+    fb->phys_height     = fb->height;
+    fb->line_double     = 0;
+    fb->interlaced_core = 0;
     if (fb->height == 576 || fb->height == 480) {
-        fb->line_double = 1;
-        fb->height     /= 2;
+        fb->line_double     = 1;
+        fb->height         /= 2;
+        fb->interlaced_core = mister_ini_has_analog_video();
     }
     fb->mmap_size = (size_t)fb->stride * fb->phys_height;
 
@@ -206,6 +273,44 @@ int fb_open(FBDev *fb, const char *path)
         perror("mmap framebuffer");
         close(fb->fd);
         return -1;
+    }
+
+    /* An HDMI-native canvas (no CRT-tuning [Menu] video_mode override) is
+     * either far bigger than anything the UI or mplayer's -vf chain is
+     * tuned for (1920x1080 — issue #19's crash was its overflow of
+     * fb_blit's old fixed-size row buffer) or 16:9-shaped (640x360, i.e.
+     * 720p with fb_size=2, where the FPGA scaler upscales the whole fb to
+     * the real output for free). Rather than teach the whole UI an
+     * arbitrary geometry, render it at a CRT-shaped layout and let fb_flip
+     * scale it into the centered 4:3 box (see ui_scaled in fb.h — a plain
+     * 640x480 top-left clamp was tried first and confirmed on an HDMI TV
+     * to read as "small squished text stuck in a corner", and a native
+     * 16:9 canvas was rejected as not-4:3). A wide box takes the full PAL
+     * 640x288 layout; a narrower one (the 480x360 box of a 640x360 canvas)
+     * renders at its own width and 2/3 of its height, so columns map 1:1
+     * (a 640-wide layout there would DOWN-scale, visibly eating glyph
+     * strokes) while rows still stretch to the tall CRT-ish pixel look.
+     * phys_height becomes the VIDEO window height: the box height, capped
+     * at 480 — video scaled to the full 960x720 box of a 720p canvas was
+     * tried and confirmed too slow on this CPU, while the small canvas's
+     * 480x360 box is cheaper than even the PAL CRT chain. Guarded on
+     * !line_double so it can never touch the 576/480 interlaced case. */
+    fb->real_width  = fb->width;
+    fb->real_height = fb->phys_height;
+    fb->ui_scaled   = 0;
+    /* The wider-than-4:3 shape test only means "16:9 square-pixel canvas"
+     * when the canvas ISN'T CRT-class: every CRT mode (640x288/640x240 and
+     * custom variants, all under 360 lines) is wider-than-4:3 in raw pixel
+     * terms precisely because its pixels are tall, and must stay native. */
+    if (!fb->line_double &&
+        (fb->width > 640 || fb->phys_height > 480 ||
+         (fb->phys_height >= 360 && 3 * fb->width > 4 * fb->phys_height))) {
+        int bx, by, bw, bh;
+        fb->ui_scaled = 1;   /* before fb_ui_box — it reads real_* only */
+        fb_ui_box(fb, &bx, &by, &bw, &bh);
+        if (bw >= 640) { fb->width = 640; fb->height = 288; }
+        else           { fb->width = bw;  fb->height = bh * 2 / 3; }
+        fb->phys_height = bh < 480 ? bh : 480;
     }
 
     fb->back = (uint8_t *)calloc(1, (size_t)fb->stride * fb->height);
@@ -245,6 +350,70 @@ void fb_set_overlay(FbOverlayFn fn)
     s_overlay = fn;
 }
 
+static int *fb_sx_row(int need);   /* shared blit x-map cache, defined below */
+
+/* The 4:3 box the scaled UI occupies within the real canvas — fills the
+ * canvas's height (or width, if it's narrower than 4:3), centered. On a
+ * 1280x720 canvas this is 960x720 at x=160: the 640x288 layout stretched
+ * 1.5x wide and 2.5x tall, i.e. displayed pixel aspect exactly 5/3 — the
+ * same PAL look par_correction() and every layout constant were tuned
+ * against, by construction rather than coincidence. Public because play()
+ * points mplayer's dsize/-geometry at this same box, so video and UI
+ * occupy exactly the same screen area (only meaningful under ui_scaled). */
+void fb_ui_box(const FBDev *fb, int *bx, int *by, int *bw, int *bh)
+{
+    int w = fb->real_height * 4 / 3;
+    int h = fb->real_height;
+    if (w > fb->real_width) {
+        w = fb->real_width;
+        h = fb->real_width * 3 / 4;
+    }
+    *bw = w;
+    *bh = h;
+    *bx = (fb->real_width - w) / 2;
+    *by = (fb->real_height - h) / 2;
+}
+
+/* fb_flip's copy stage under ui_scaled (see fb.h): nearest-neighbor scale
+ * of the 640x288 back-buffer into the centered 4:3 box, plus re-blacking
+ * the pillar/letterbox bars each flip (mplayer scribbles the whole canvas
+ * during video, so the bars can't be treated as write-once). The column
+ * map depends only on x — computed once per flip and reused across every
+ * row via the same fb_sx_row cache the blits use (same thread, never
+ * concurrent with them). */
+static void fb_flip_scaled(FBDev *fb)
+{
+    int bx, by, bw, bh;
+    fb_ui_box(fb, &bx, &by, &bw, &bh);
+
+    int *xmap = fb_sx_row(bw);
+    if (!xmap) return;   /* OOM — keep the previous frame rather than crash */
+    for (int dx = 0; dx < bw; dx++) {
+        int sx = (int)((int64_t)dx * fb->width / bw);
+        xmap[dx] = sx >= fb->width ? fb->width - 1 : sx;
+    }
+
+    /* Bars: full rows above/below the box, row segments beside it. */
+    for (int y = 0; y < by; y++)
+        memset(fb->mem + (size_t)y * fb->stride, 0, (size_t)fb->stride);
+    for (int y = by + bh; y < fb->real_height; y++)
+        memset(fb->mem + (size_t)y * fb->stride, 0, (size_t)fb->stride);
+
+    for (int dy = 0; dy < bh; dy++) {
+        int sy = (int)((int64_t)dy * fb->height / bh);
+        if (sy >= fb->height) sy = fb->height - 1;
+        const uint32_t *src = (const uint32_t *)(fb->back + (size_t)sy * fb->stride);
+        uint8_t        *row = fb->mem + (size_t)(by + dy) * fb->stride;
+        if (bx > 0) memset(row, 0, (size_t)bx * 4);
+        uint32_t *dst = (uint32_t *)row + bx;
+        for (int dx = 0; dx < bw; dx++)
+            dst[dx] = src[xmap[dx]];
+        int right = bx + bw;
+        if (right < fb->real_width)
+            memset(row + (size_t)right * 4, 0, (size_t)(fb->real_width - right) * 4);
+    }
+}
+
 void fb_flip(FBDev *fb)
 {
     g_fb_flip_count++;
@@ -279,6 +448,8 @@ void fb_flip(FBDev *fb)
             memcpy(dst, src, (size_t)fb->stride);
             memcpy(dst + fb->stride, src, (size_t)fb->stride);
         }
+    } else if (fb->ui_scaled) {
+        fb_flip_scaled(fb);
     } else {
         memcpy(fb->mem, fb->back, (size_t)fb->stride * fb->height);
     }
@@ -292,6 +463,26 @@ void fb_sync_back(FBDev *fb)
         for (int y = 0; y < fb->height; y++)
             memcpy(fb->back + (size_t)y * fb->stride,
                    fb->mem + (size_t)(2 * y) * fb->stride, (size_t)fb->stride);
+    } else if (fb->ui_scaled) {
+        /* Inverse of fb_flip_scaled: sample the on-screen 4:3 box back down
+         * to the logical canvas. During video the screen holds mplayer's
+         * 640x480 window (centered by its vo within the real canvas, i.e.
+         * inside this box), so overlays composited on the result still show
+         * the paused frame underneath — resampled, which is fine for a
+         * still image behind a pause/submenu overlay. */
+        int bx, by, bw, bh;
+        fb_ui_box(fb, &bx, &by, &bw, &bh);
+        for (int y = 0; y < fb->height; y++) {
+            int sy = by + (int)((int64_t)y * bh / fb->height);
+            if (sy >= fb->real_height) sy = fb->real_height - 1;
+            const uint32_t *src = (const uint32_t *)(fb->mem + (size_t)sy * fb->stride) + bx;
+            uint32_t       *dst = (uint32_t *)(fb->back + (size_t)y * fb->stride);
+            for (int x = 0; x < fb->width; x++) {
+                int sx = (int)((int64_t)x * bw / fb->width);
+                if (sx >= bw) sx = bw - 1;
+                dst[x] = src[sx];
+            }
+        }
     } else {
         memcpy(fb->back, fb->mem, (size_t)fb->stride * fb->height);
     }
@@ -335,6 +526,29 @@ void fb_fill_rect_alpha(FBDev *fb,
     }
 }
 
+/* Shared growable cache for fb_blit/fb_blit_opaque's per-row sx table (see
+ * their own comments) — grows on demand and is kept across calls instead of
+ * malloc/free every blit; safe as a single static buffer since UI drawing
+ * is single-threaded and the two never run concurrently. A fixed [640] here
+ * assumed fb->width is always <= 640, which is only true for the CRT-tuned
+ * UI canvas (see fb_open's clamp) — line-doubled HDMI modes (video_mode 2/3,
+ * 720x480@60 / 720x576@50) report width=720 with that clamp guarded off
+ * (line_double bypasses it on purpose, see fb_open), so a fixed 640 array
+ * was still reachable there — confirmed as the actual overflow behind
+ * issue #19's segfault, not fully closed by the clamp alone. */
+static int *fb_sx_row(int need)
+{
+    static int *buf;
+    static int  cap;
+    if (need > cap) {
+        int *grown = (int *)realloc(buf, (size_t)need * sizeof(int));
+        if (!grown) return NULL;
+        buf = grown;
+        cap = need;
+    }
+    return buf;
+}
+
 void fb_blit(FBDev *fb,
              const uint8_t *pixels, int sw, int sh,
              int dx, int dy, int dw, int dh,
@@ -355,10 +569,11 @@ void fb_blit(FBDev *fb,
      * this platform (Cortex-A9, no hardware integer divide — "/dw" is a
      * software routine) that redundant division was confirmed via DEBUGLOG
      * timing as the dominant cost of the grid mosaic background (~28ms of
-     * a ~35ms frame). Precompute once; fb->width is 640 on every supported
-     * mode (PAL 640x288 / NTSC 640x240), so a fixed-size row is enough. */
-    int sx_row[640];
+     * a ~35ms frame). Precompute once — see fb_sx_row's own comment for why
+     * this grows dynamically instead of a fixed-size row. */
     int nx = x1 - x0;
+    int *sx_row = fb_sx_row(nx);
+    if (!sx_row) return;   /* OOM — skip this blit rather than crash */
     for (int i = 0; i < nx; i++) {
         int sx = (x0 + i - dx) * sw / dw;
         if (sx < 0) sx = 0;
@@ -407,8 +622,9 @@ void fb_blit_opaque(FBDev *fb,
     int x1 = (dx + dw) > fb->width  ? fb->width  : (dx + dw);
     int y1 = (dy + dh) > fb->height ? fb->height : (dy + dh);
 
-    int sx_row[640];
     int nx = x1 - x0;
+    int *sx_row = fb_sx_row(nx);
+    if (!sx_row) return;   /* OOM — skip this blit rather than crash */
     for (int i = 0; i < nx; i++) {
         int sx = (x0 + i - dx) * sw / dw;
         if (sx < 0) sx = 0;

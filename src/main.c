@@ -123,11 +123,13 @@ static void cursor_show(void);  /* forward decl for emergency_cleanup */
  * the choreography around a playback: create the flag file the vo checks,
  * SIGSTOP Main_MiSTer so the raw SPI flips can't race its bus traffic,
  * and on stop put the display back on page 0 (the Linux fb this app draws)
- * and wake Main back up. Engaged only under line_double — progressive
- * modes never suffered the write-vs-beam race badly enough to need it,
- * and keeping Main running is strictly safer. */
+ * and wake Main back up. Engaged only under the real interlaced core
+ * (fb.interlaced_core, not the broader line_double geometry — a
+ * progressive HDMI canvas line-doubles the UI without any of this) —
+ * progressive modes never suffered the write-vs-beam race badly enough to
+ * need it, and keeping Main running is strictly safer. */
 #define PAGEFLIP_FLAG "/tmp/misterfin_pageflip"
-static int   g_pageflip_mode    = 0;   /* fb.line_double, latched in main() */
+static int   g_pageflip_mode    = 0;   /* fb.interlaced_core, latched in main() */
 static int   g_pageflip_engaged = 0;   /* between pageflip_begin() and _end() */
 static pid_t g_mister_pid       = 0;
 
@@ -2329,9 +2331,11 @@ static void draw_paused(FBDev *fb, const char *name, double pos)
      * path is always tear-free via hardware page-flip regardless of the
      * /tmp/misterdvd_vsync flag (see draw_slice()'s pf_active gate in
      * docker/vo_fbdev.c), so don't offer or hint at a control that does
-     * nothing there. */
+     * nothing there. g_pageflip_mode, not fb->line_double: the hint must
+     * track the same flag the INP_L/INP_R handling is gated on, and a
+     * progressive HDMI canvas line-doubles WITHOUT page flipping. */
     const char *hint;
-    if (fb->line_double) {
+    if (g_pageflip_mode) {
         hint = (g_info_item.sub_count > 0 || g_info_item.audio_count > 1)
             ? "B:resume  A:stop  SELECT:tracks"
             : "B:resume  A:stop";
@@ -3648,9 +3652,23 @@ static void play(FBDev *fb, const char *item_id, double offset_secs)
      * opens /dev/fb0 itself and sees the real line count, and on an
      * interlaced 576/480-line raster the whole point is that video CAN
      * carry that full vertical resolution (the UI's line doubling is a
-     * layout decision, not a display limit). vh == fb->height everywhere
-     * except under line doubling. */
+     * layout decision, not a display limit). vw/vh == fb->width/height
+     * everywhere except under line doubling — or under ui_scaled, where
+     * they're the 640x480 window fb_open clamped out of the bigger canvas,
+     * -geometry'd to its center. Scaling video to the UI's full 960x720
+     * box instead was tried and the extra swscale/framebuffer-write load
+     * visibly outran this CPU (confirmed on hardware) — the smaller
+     * centered window is the deliberate trade; play() blanks the screen
+     * first so the UI doesn't linger around it. */
+    int vw = fb->width;
     int vh = fb->phys_height;
+    char geom_arg[24];
+    int  have_geom = 0;
+    if (fb->ui_scaled) {
+        snprintf(geom_arg, sizeof(geom_arg), "+%d+%d",
+                 (fb->real_width - vw) / 2, (fb->real_height - vh) / 2);
+        have_geom = 1;
+    }
 
     char vf_arg[128];
     if (vh == 288 && !g_zoom_mode &&
@@ -3677,7 +3695,7 @@ static void play(FBDev *fb, const char *item_id, double offset_secs)
          * and multi-minute zero-drift/zero-drop soaks). Bitrate-only tweaks
          * on 480x270 stay on this chain. */
         snprintf(vf_arg, sizeof(vf_arg), "scale=%d:-1,expand=%d:%d:-1:-1:1,dsize=%d:%d",
-                 fb->width, fb->width, vh, fb->width, vh);
+                 vw, vw, vh, vw, vh);
     } else {
         /* NTSC (and any other non-288 height), plus PAL with a custom
          * transcode profile (see above) — confirmed on hardware that
@@ -3694,8 +3712,32 @@ static void play(FBDev *fb, const char *item_id, double offset_secs)
          * missing — better than reverting to the confirmed-broken chain. */
         double dar = item_dar();
 
-        int target_h = (int)(4.0 * vh / (3.0 * dar) + 0.5);
-        target_h &= ~1;                        /* even, required for yuv420p chroma subsampling */
+        /* The 4:3-display height formula below is right for every CRT-class
+         * canvas (their pixels aren't square and the screen is 4:3). A
+         * square-pixel canvas that ISN'T a 4:3 window — 640x360, i.e. 720p
+         * with fb_size=2, where the FPGA scaler upscales the whole fb to
+         * the 16:9 output for free — needs a plain both-dimensions fit
+         * instead: the old math letterboxed a 16:9 title on it AND showed
+         * it display-stretched. Same <360-lines rule as par_correction();
+         * for the 4:3 square-pixel canvases this also covers (the 640x480
+         * ui_scaled window) the two formulas are algebraically identical
+         * (640/dar == 4*480/(3*dar)), so nothing changes there. */
+        int square_fit = !fb->line_double && vh >= 360;
+        int target_w = vw;
+        int target_h;
+        if (square_fit) {
+            target_h = (int)(vw / dar + 0.5);
+            if (target_h > vh) {
+                target_h = vh;
+                target_w = (int)(vh * dar + 0.5);
+            }
+        } else {
+            target_h = (int)(4.0 * vh / (3.0 * dar) + 0.5);
+        }
+        target_w &= ~1;                        /* even, required for yuv420p chroma subsampling */
+        if (target_w < 2) target_w = 2;
+        if (target_w > vw) target_w = vw;
+        target_h &= ~1;
         if (target_h < 2) target_h = 2;
         if (target_h > vh) target_h = vh;
 
@@ -3711,7 +3753,34 @@ static void play(FBDev *fb, const char *item_id, double offset_secs)
          * the visible ~[40,vh) window rather than the full [0,vh) buffer.
          * Only applies to this mode (vh is only ever 576/480 here); NTSC's
          * ordinary 240-line progressive path is unaffected. */
-        if (g_zoom_mode) {
+        if (g_zoom_mode && square_fit) {
+            /* The same two picture modes as the CRT branch below, rebuilt
+             * for a square-pixel window (no PAR games, no interlaced crop,
+             * and the Original fit already sized BOTH dimensions above):
+             * Stretch fills the window in one distorting pass; Zoom 4:3
+             * enlarges the Original fit until it covers the window and
+             * center-crops the overflow — for a 4:3 picture baked into a
+             * 16:9 file that overflow is exactly the black side bars. */
+            if (g_zoom_mode == 2) {
+                snprintf(vf_arg, sizeof(vf_arg), "scale=%d:%d,dsize=%d:%d",
+                         vw, vh & ~1, vw, vh);
+            } else {
+                double zw = (double)vw / target_w, zh = (double)vh / target_h;
+                double z  = zw > zh ? zw : zh;
+                int sw = ((int)(target_w * z + 0.5)) & ~1;
+                int sh = ((int)(target_h * z + 0.5)) & ~1;
+                if (sw < vw) sw = vw;
+                if (sh < (vh & ~1)) sh = vh & ~1;
+                snprintf(vf_arg, sizeof(vf_arg), "scale=%d:%d,crop=%d:%d,dsize=%d:%d",
+                         sw, sh, vw, vh & ~1, vw, vh);
+            }
+            goto vf_done;
+        }
+
+        /* !square_fit from here down: this zoom math is built around the
+         * 4:3-display width-first fit (z scales off target_h with width
+         * pinned at vw) — the square-pixel case took its own branch above. */
+        if (g_zoom_mode && !square_fit) {
             /* Picture modes (see g_zoom_mode's comment for what each means
              * and why there's no auto-detection). Under the interlaced
              * core's cropped raster only [40, vh) is visible (see the
@@ -3720,20 +3789,23 @@ static void play(FBDev *fb, const char *item_id, double offset_secs)
              * receives exactly framebuffer-sized frames, so the NTSC comb
              * failure mode this branch's own comment describes can't
              * re-enter through here. */
-            int usable_h = fb->line_double ? vh - 40 : vh;
+            /* interlaced_core, NOT line_double: the 40-row crop is a
+             * property of the interlaced core's raster — a progressive
+             * HDMI canvas with the same line count shows all vh rows. */
+            int usable_h = fb->interlaced_core ? vh - 40 : vh;
             char expand_zoom[48];
-            if (fb->line_double)
+            if (fb->interlaced_core)
                 snprintf(expand_zoom, sizeof(expand_zoom), "expand=%d:%d:-1:%d:0",
-                         fb->width, vh, 40);
+                         vw, vh, 40);
             else
                 snprintf(expand_zoom, sizeof(expand_zoom), "expand=%d:%d:-1:-1:1",
-                         fb->width, vh);
+                         vw, vh);
 
             if (g_zoom_mode == 2) {
                 /* Stretch: one swscale pass straight to the full screen —
                  * vertical geometry distorts, nothing is cropped. */
                 snprintf(vf_arg, sizeof(vf_arg), "scale=%d:%d,%s,dsize=%d:%d",
-                         fb->width, usable_h & ~1, expand_zoom, fb->width, vh);
+                         vw, usable_h & ~1, expand_zoom, vw, vh);
             } else {
                 /* Zoom 4:3: scale the normal aspect-correct fit (640 x
                  * target_h) UP so the picture fills the full height, then
@@ -3742,17 +3814,19 @@ static void play(FBDev *fb, const char *item_id, double offset_secs)
                  * screen dimensions, not source-dependent. For pillarboxed
                  * 4:3-in-16:9 the crop removes just the baked bars. */
                 double z = (double)usable_h / target_h;
-                int sw = ((int)(fb->width * z + 0.5)) & ~1;
+                int sw = ((int)(vw * z + 0.5)) & ~1;
                 int sh = usable_h & ~1;
-                if (sw < fb->width) sw = fb->width;
+                if (sw < vw) sw = vw;
                 snprintf(vf_arg, sizeof(vf_arg), "scale=%d:%d,crop=%d:%d,%s,dsize=%d:%d",
-                         sw, sh, fb->width, sh, expand_zoom, fb->width, vh);
+                         sw, sh, vw, sh, expand_zoom, vw, vh);
             }
             goto vf_done;
         }
 
         char expand_arg[48];
-        if (fb->line_double) {
+        /* interlaced_core, NOT line_double — same reason as the zoom branch
+         * above: only the real interlaced raster crops the top 40 rows. */
+        if (fb->interlaced_core) {
             /* Center within the VISIBLE window [40, vh), not the full
              * [0, vh) buffer — the first attempt added 40 on top of a
              * normal full-buffer centering, which overshot downward
@@ -3785,12 +3859,12 @@ static void play(FBDev *fb, const char *item_id, double offset_secs)
              * for exactly the reason our vo-level clamp never got a
              * chance to run. Turning it off here lets DRAW_OSD reach the
              * vo, where it has the crop margin to correct it. */
-            snprintf(expand_arg, sizeof(expand_arg), "expand=%d:%d:-1:%d:0", fb->width, vh, top);
+            snprintf(expand_arg, sizeof(expand_arg), "expand=%d:%d:-1:%d:0", vw, vh, top);
         } else {
-            snprintf(expand_arg, sizeof(expand_arg), "expand=%d:%d:-1:-1:1", fb->width, vh);
+            snprintf(expand_arg, sizeof(expand_arg), "expand=%d:%d:-1:-1:1", vw, vh);
         }
         snprintf(vf_arg, sizeof(vf_arg), "scale=%d:%d,%s,dsize=%d:%d",
-                 fb->width, target_h, expand_arg, fb->width, vh);
+                 target_w, target_h, expand_arg, vw, vh);
     }
 vf_done:;
 
@@ -3883,10 +3957,13 @@ vf_done:;
          * subtitle font gets a dedicated 2x atlas for this mode (see
          * subfont2x above) applies here too, confirmed on hardware: the
          * ordinary font read vertically squished once OSD text became
-         * visible on the interlaced raster. */
+         * visible on the interlaced raster. ui_scaled qualifies for the
+         * same reason from the other direction: the video window there is
+         * ~720 physical lines, where the 1x glyphs read half-size. */
         args[an++] = "-font";
-        args[an++] = fb->line_double ? "/media/fat/misterfin/font2x/font.desc"
-                                     : "/media/fat/misterfin/font/font.desc";
+        args[an++] = (fb->line_double || (fb->ui_scaled && fb->phys_height >= 480))
+                         ? "/media/fat/misterfin/font2x/font.desc"
+                         : "/media/fat/misterfin/font/font.desc";
         args[an++] = "-framedrop";
         args[an++] = "-autosync"; args[an++] = "30";
         args[an++] = "-cache";    args[an++] = "8192";
@@ -3916,6 +3993,16 @@ vf_done:;
                 * corruption artifacts once tested against a 240-tall NTSC
                 * framebuffer. */
         args[an++] = "-vf";       args[an++] = vf_arg;
+        /* vo_fbdev anchors the dsize'd frame at (0,0) unless -geometry
+         * says otherwise — invisible on every CRT setup, where the canvas
+         * IS exactly dsize-sized, but on an HDMI canvas (ui_scaled — see
+         * fb.h) the video window sat top-left while the scaled UI drew
+         * centered. geom_arg (set alongside vw/vh above) pins the window
+         * to the UI's own 4:3 box; gated on ui_scaled so no CRT invocation
+         * ever gains a new argument. */
+        if (have_geom) {
+            args[an++] = "-geometry"; args[an++] = geom_arg;
+        }
         args[an++] = "-lavdopts"; args[an++] = "threads=2:fast";
                /* volume=-3: a few dB of headroom before the s16 conversion.
                 * Loudness-war-era masters sit at 0dBFS and lossy decode
@@ -3967,10 +4054,13 @@ vf_done:;
          * shows up half-size and squashed, so those modes get a dedicated
          * 24px atlas — an exact 3x of the 8x8 glyphs, so every stroke stays
          * the same thickness (13px's fractional 1.625x scale mixes 1px and
-         * 2px strokes), visually matching 12px at 288 lines. */
+         * 2px strokes), visually matching 12px at 288 lines. ui_scaled's
+         * ~720-line video window has the same physical-line-count reason
+         * as the -font choice above. */
         args[an++] = "-subfont";
-        args[an++] = fb->line_double ? "/media/fat/misterfin/subfont2x/font.desc"
-                                     : "/media/fat/misterfin/subfont/font.desc";
+        args[an++] = (fb->line_double || (fb->ui_scaled && fb->phys_height >= 480))
+                         ? "/media/fat/misterfin/subfont2x/font.desc"
+                         : "/media/fat/misterfin/subfont/font.desc";
         args[an++] = "-subwidth"; args[an++] = "90";
         args[an++] = "-subpos";   args[an++] = "92";
         /* Audio consistently trails video by a small fixed amount
@@ -3994,7 +4084,15 @@ vf_done:;
 
     /* mplayer is connecting + filling its cache in the background at this
      * point and hasn't touched /dev/fb0 yet — safe window to show the
-     * loading spinner without racing its own frame writes. */
+     * loading spinner without racing its own frame writes. Under ui_scaled
+     * the video window can be smaller than the UI's 4:3 box, so blank the
+     * SCREEN first (clear + flip, not just the back buffer: spinner_show's
+     * own first act is fb_sync_back, which would pull the still-displayed
+     * UI right back over a back-buffer-only clear — confirmed on hardware
+     * as the UI lingering around the video window). Everywhere else the
+     * old behavior (last screen stays visible behind the spinner) is
+     * deliberate — see the no-clear comment at the top of this function. */
+    if (fb->ui_scaled) { fb_clear(fb); fb_flip(fb); }
     spinner_show(fb, 2.0);
 
     /* Nothing subtitle-related to send here: a client-rendered selection
@@ -4753,13 +4851,15 @@ int main(int argc, char **argv)
                      * paused with nothing left running to resume it. */
 
     g_headless = fb.headless;   /* see g_headless' own comment */
-    g_pageflip_mode = fb.line_double;   /* see pageflip_begin()'s comment */
+    g_pageflip_mode = fb.interlaced_core;   /* see pageflip_begin()'s comment */
     /* The interlaced menu core builds its own raster (in-core modeline
      * conversion — different active width and porches than the progressive
      * modes the 24px margin was tuned against over months), and on a real
      * CRT it overscans noticeably more: confirmed on hardware that edges
      * of the UI get eaten at the stock margin. Widen the title-safe zone
-     * for that mode only; progressive stays exactly as tuned. */
+     * for that mode only; progressive stays exactly as tuned. Kept on
+     * line_double (not interlaced_core): a progressive HDMI 480/576 canvas
+     * shares the layout, and a slightly wider margin is harmless there. */
     if (fb.line_double) SAFE_X = 36;
     /* SAFE_Y as a plain pixel count made the top/bottom margin look
      * noticeably BIGGER than the left/right margin on real hardware, even
@@ -4782,18 +4882,20 @@ int main(int argc, char **argv)
     /* Enable vsync by default — mplayer's patched vo_fbdev checks this file
      * each frame (see VSYNC_FLAG comment above).
      *
-     * EXCEPT on an interlaced full-frame raster (line_double): that mode is
+     * EXCEPT on the real interlaced core (interlaced_core, not the broader
+     * line_double geometry — a progressive HDMI 480/576 canvas scans out
+     * normally and takes the ordinary vsync default): that mode is
      * tear-free via hardware page-flip instead (pf_active in vo_fbdev.c's
      * draw_slice() skips this wait entirely, so the flag is normally moot
      * there), and L/R is disabled during playback in that mode for the same
      * reason (see the INP_L/INP_R handling above). Clearing it here is a
      * fallback for the rare case page-flip itself fails to engage (e.g. the
      * MiSTer_fb mmap in pf_init() fails) — measured on hardware before
-     * page-flip existed that this per-frame wait doesn't line up with this
+     * page-flip existed that this per-frame wait doesn't line up with that
      * scanout mode's field timing (A-V drift grew 11s in 45s with the flag
      * on, vs. 0.000 with it off), so leaving it off is the safer default if
      * that fallback path is ever hit. */
-    if (!fb.line_double) {
+    if (!fb.interlaced_core) {
         int vf = open(VSYNC_FLAG, O_WRONLY|O_CREAT|O_TRUNC, 0644); if (vf >= 0) close(vf);
     } else {
         unlink(VSYNC_FLAG);   /* clear a stale flag from a previous run */
@@ -4856,8 +4958,9 @@ int main(int argc, char **argv)
      * here rather than earlier because it wants the just-computed startup
      * outcome (which credential path worked, or exactly why none did), not
      * just the inputs to it. A no-op unless DEBUGLOG is set. */
-    jf_log_line("fb: %dx%d line_double=%d headless=%d",
-                fb.width, fb.height, fb.line_double, fb.headless);
+    jf_log_line("fb: %dx%d (real %dx%d) line_double=%d interlaced_core=%d ui_scaled=%d headless=%d",
+                fb.width, fb.height, fb.real_width, fb.real_height,
+                fb.line_double, fb.interlaced_core, fb.ui_scaled, fb.headless);
     for (int i = 0; i < input_device_count(); i++)
         jf_log_line("input: %s \"%s\"%s", input_device_node(i), input_device_name(i),
                     input_device_is_virtual(i) ? " [MiSTer virtual]" : "");
@@ -4912,7 +5015,7 @@ int main(int argc, char **argv)
         if (ddr_engaged)
             ddr_set_mode(strcasecmp(g_cfg.tv_mode, "NTSC") == 0 ? 0 : 2);
         jf_log_line("menu core: zaparoo_menu_rbf=%d interlaced_core=%d ddr_engaged=%d",
-                    zaparoo_active, fb.line_double, ddr_engaged);
+                    zaparoo_active, fb.interlaced_core, ddr_engaged);
     }
 
     /* Start GitHub release check in background — result appears on the
