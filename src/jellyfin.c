@@ -740,7 +740,11 @@ static char *jf_request_alloc(const JfConfig *cfg, const char *method,
     clock_gettime(CLOCK_MONOTONIC, &t1);
 
     double elapsed_ms = (t1.tv_sec - t0.tv_sec) * 1000.0 + (t1.tv_nsec - t0.tv_nsec) / 1e6;
-    jf_log_request(method, path_and_query, ok && result != NULL, elapsed_ms,
+    /* ok alone, not "ok && result != NULL": a 204 No Content (the normal
+     * response for the Sessions/Playing family) has an empty body, so
+     * result is NULL even though curl's own exit status says the request
+     * succeeded — logging that as FAIL was blaming the wrong thing. */
+    jf_log_request(method, path_and_query, ok, elapsed_ms,
                     result ? (long)strlen(result) : 0);
 
     return result;
