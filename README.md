@@ -31,7 +31,7 @@ The UI is currently tuned for PAL/NTSC-resolution CRT output (288p/240p) — it 
   - [Now playing (music)](#now-playing)
 - [Known limitations](#known-limitations)
 - [Changelog](#changelog)
-  - [v1.0.0](#v1-0-0) · [v0.9.9](#v0-9-9) · [v0.9.8](#v0-9-8) · [v0.9.7](#v0-9-7) · [v0.9.6](#v0-9-6) · [v0.9.5](#v0-9-5) · [v0.9.4](#v0-9-4) · [v0.9.3](#v0-9-3) · [v0.9.2](#v0-9-2) · [v0.9.1](#v0-9-1) · [v0.9](#v0-9)
+  - [Unreleased](#unreleased) · [v1.0.0](#v1-0-0) · [v0.9.9](#v0-9-9) · [v0.9.8](#v0-9-8) · [v0.9.7](#v0-9-7) · [v0.9.6](#v0-9-6) · [v0.9.5](#v0-9-5) · [v0.9.4](#v0-9-4) · [v0.9.3](#v0-9-3) · [v0.9.2](#v0-9-2) · [v0.9.1](#v0-9-1) · [v0.9](#v0-9)
 - [Credits](#credits)
 - [Thanks](#thanks)
 - [Licence](#licence)
@@ -350,6 +350,9 @@ Verified against a real Jellyfin 10.11 server: auth, browsing (views/items, incl
 ---
 
 ## <a id="changelog"></a>Changelog
+
+### <a id="unreleased"></a>Unreleased
+- Fixed video/music playback failing on an `https://` Jellyfin server — the bundled mplayer's FFmpeg has no TLS support, so the stream is now fetched with curl (which already handles HTTPS for every other request) into a FIFO and handed to mplayer that way. Plain `http://` setups are unaffected
 
 ### <a id="v1-0-0"></a>v1.0.0
 - Fixed choppy video playback when a title's frame rate doesn't match the display's (e.g. NTSC-rate content on a PAL setup)
