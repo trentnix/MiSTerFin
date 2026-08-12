@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <sys/types.h>
 
 /* Jellyfin REST client — curl shelled out via popen(), no libcurl dependency.
  * All endpoints/params below were verified
@@ -534,6 +535,15 @@ int jf_stream_url(const JfConfig *cfg, const char *item_id,
  * included anyway so progress reporting has a consistent session id. */
 int jf_audio_stream_url(const JfConfig *cfg, const char *item_id,
                          const char *play_session_id, char *out, int outlen);
+
+/* Forks curl to fetch an https:// stream url and write its body into
+ * fifo_path (a FIFO the caller has already created with mkfifo), for
+ * mplayer builds whose own bundled FFmpeg has no TLS backend. Does not
+ * wait — curl keeps running for as long as mplayer is reading the other
+ * end, so the caller tracks/kills the returned pid itself (the same way it
+ * already does for the player pid). Returns -1 if fork() failed. */
+pid_t jf_spawn_stream_curl(const JfConfig *cfg, const char *url,
+                            const char *fifo_path);
 
 /* Downloads subtitle track sub_index (JfSubtitle.index, i.e. the
  * MediaStreams[].Index) as .srt to dest_path — served directly (no

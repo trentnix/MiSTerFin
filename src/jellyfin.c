@@ -669,6 +669,33 @@ static int jf_add_tls_args(const JfConfig *cfg, const char **argv, int n)
     return n;
 }
 
+/* Unlike jf_curl_run, this never waits for curl to exit: it's meant to run
+ * for the whole length of a video/track, in parallel with mplayer reading
+ * the other end of the FIFO, so blocking here would defeat the point.
+ * curl's own open of fifo_path (for -o) blocks until a reader shows up the
+ * same way mplayer's open of it blocks until a writer shows up — two
+ * independent processes rendezvousing through the kernel, nothing for this
+ * function to coordinate. */
+pid_t jf_spawn_stream_curl(const JfConfig *cfg, const char *url, const char *fifo_path)
+{
+    const char *argv[16];
+    int n = 0;
+    argv[n++] = "curl";
+    argv[n++] = "-sf";
+    n = jf_add_tls_args(cfg, argv, n);
+    argv[n++] = "-o"; argv[n++] = fifo_path;
+    argv[n++] = url;
+    argv[n]   = NULL;
+
+    pid_t pid = fork();
+    if (pid != 0) return pid;   /* parent: pid, or -1 on fork failure */
+
+    int devnull = open("/dev/null", O_WRONLY);
+    if (devnull >= 0) { dup2(devnull, STDOUT_FILENO); dup2(devnull, STDERR_FILENO); close(devnull); }
+    execv(CURL_BIN, (char *const *)argv);
+    _exit(127);
+}
+
 static char *jf_request_alloc(const JfConfig *cfg, const char *method,
                                const char *path_and_query, const char *body_file,
                                int timeout_secs)

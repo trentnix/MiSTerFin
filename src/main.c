@@ -44,6 +44,9 @@
 #include "session.h"
 
 #define MPLAYER      "/media/fat/misterfin/mplayer-arm"
+/* See stream_via_curl_if_https — only one stream (video or music, never
+ * both) plays at a time, so a single fixed path is enough. */
+#define STREAM_FIFO_PATH "/tmp/misterfin_stream.fifo"
 /* Main-thread download scratch file. grid.c names the same path (its
  * GRID_POSTER_TMP) for its own main-thread downloads — same thread, so
  * sharing is deliberate and safe; keep the two in sync. */
@@ -2346,6 +2349,11 @@ static void draw_paused(FBDev *fb, const char *name, double pos)
 /* ── playback (mplayer slave-mode) ───────────────────────────────────────── */
 
 static pid_t   g_player_pid      = -1;
+/* Only set when the current stream is https:// — mplayer's bundled FFmpeg
+ * has no TLS backend, so curl fetches it into a FIFO instead (see
+ * stream_via_curl_if_https). -1 means the player is reading its URL
+ * directly, the ordinary http:// path, unchanged. */
+static pid_t   g_curl_pid        = -1;
 static int     g_cmd_fd          = -1;
 static double  g_play_offset     = 0.0;
 static double  g_play_start_wall = 0.0;
@@ -2477,6 +2485,26 @@ static int playback_watched(int64_t runtime_ticks, double pos_sec)
 static int player_running(void)
 {
     if (g_player_pid < 0) return 0;
+    if (g_curl_pid > 0) {
+        int cstatus;
+        if (waitpid(g_curl_pid, &cstatus, WNOHANG) > 0) {
+            g_curl_pid = -1;
+            if (!(WIFEXITED(cstatus) && WEXITSTATUS(cstatus) == 0)) {
+                /* curl died (bad TLS, DNS, connection refused, ...) — mplayer
+                 * is left blocked opening/reading a FIFO with no writer left
+                 * and would otherwise hang on it forever. Tear the whole
+                 * subtree down now, exactly like mplayer exiting on its
+                 * own — SIGKILL reaches it even mid-open(). */
+                kill(-g_player_pid, SIGKILL);
+                waitpid(g_player_pid, NULL, 0);
+                g_player_pid = -1;
+                return 0;
+            }
+            /* curl finished (exit 0) — the whole stream is now sitting in
+             * the FIFO/mplayer's own cache; let mplayer play it out and hit
+             * EOF on its own below, same as any other title ending. */
+        }
+    }
     int status;
     if (waitpid(g_player_pid, &status, WNOHANG) > 0) { g_player_pid = -1; return 0; }
     return 1;
@@ -2497,6 +2525,14 @@ static void player_stop(void)
         waitpid(g_player_pid, NULL, 0);
         g_player_pid = -1;
     }
+    if (g_curl_pid > 0) {
+        /* Its own process, not in mplayer's group (see stream_via_curl_if_
+         * https) — killed explicitly so a stop/seek-restart never leaves it
+         * holding the HTTPS connection open. */
+        kill(g_curl_pid, SIGKILL);
+        waitpid(g_curl_pid, NULL, 0);
+        g_curl_pid = -1;
+    }
     /* SIGKILL means mplayer's own uninit page restore never ran — put the
      * display back on page 0 and wake Main up (no-op unless engaged). */
     pageflip_end();
@@ -2510,6 +2546,36 @@ static void player_stop(void)
      * immediately play() again) the screen can show raw console text
      * instead of our spinner/video for a moment (confirmed on hardware). */
     cursor_hide();
+}
+
+/* mplayer's bundled FFmpeg has no TLS backend (confirmed on hardware:
+ * "https protocol not found, recompile FFmpeg with openssl, gnutls or
+ * securetransport enabled" — issue reported against a Jellyfin server
+ * behind a reverse proxy/Cloudflare), so an https:// stream can't be handed
+ * to it directly. curl already has a working TLS stack for every other
+ * Jellyfin API call this app makes, so it fetches the stream instead and
+ * writes it into a FIFO; mplayer is pointed at that FIFO path in place of
+ * the URL and never knows the difference. http:// streams are left
+ * completely untouched by this — the new code path only ever runs for
+ * users who currently have nothing working over HTTPS, so it can't
+ * regress the months-proven plain-HTTP path.
+ *
+ * Rewrites `url` in place on success. On any setup failure (mkfifo, fork)
+ * it leaves `url` alone, so playback falls back to handing mplayer the
+ * https:// URL directly — exactly the same failure this already has today,
+ * not a new one. */
+static void stream_via_curl_if_https(char *url, size_t url_len)
+{
+    if (strncasecmp(url, "https://", 8) != 0) return;
+
+    unlink(STREAM_FIFO_PATH);
+    if (mkfifo(STREAM_FIFO_PATH, 0600) != 0) return;
+
+    pid_t pid = jf_spawn_stream_curl(&g_cfg, url, STREAM_FIFO_PATH);
+    if (pid <= 0) { unlink(STREAM_FIFO_PATH); return; }
+
+    g_curl_pid = pid;
+    snprintf(url, url_len, "%s", STREAM_FIFO_PATH);
 }
 
 static void player_pause_toggle(void)
@@ -3550,6 +3616,7 @@ static void play(FBDev *fb, const char *item_id, double offset_secs)
     const JfStreamProfile profile = stream_profile();
     jf_stream_url(&g_cfg, item_id, &profile, start_ticks, g_play_session_id,
                   g_burned_in_sub_index, g_current_audio_index, url, sizeof(url));
+    stream_via_curl_if_https(url, sizeof(url));
     /* Deliberately no item_id/title/url here — those identify what's in
      * someone's library, not how MiSTerFin behaved. */
     jf_log_line("play: profile=%dx%d@%d fb_phys_h=%d line_double=%d resume=%.0fs",
@@ -3959,6 +4026,7 @@ static void play_audio(FBDev *fb, int queue_pos)
     jf_make_play_session_id(g_play_session_id, sizeof(g_play_session_id));
     char url[700];
     jf_audio_stream_url(&g_cfg, it->id, g_play_session_id, url, sizeof(url));
+    stream_via_curl_if_https(url, sizeof(url));
 
     g_play_offset     = 0.0;
     g_play_start_wall = now_sec();
