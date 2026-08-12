@@ -353,6 +353,7 @@ Verified against a real Jellyfin 10.11 server: auth, browsing (views/items, incl
 
 ### <a id="unreleased"></a>Unreleased
 - Fixed video/music playback failing on an `https://` Jellyfin server — the bundled mplayer's FFmpeg has no TLS support, so the stream is now fetched with curl (which already handles HTTPS for every other request) into a FIFO and handed to mplayer that way. Plain `http://` setups are unaffected
+- **HDMI/flat-panel support** — MiSTerFin used to crash outright on an HDMI-native framebuffer (a segfault the moment anything drew). It now presents the whole experience as a centered 4:3 box inside the 16:9 frame: the UI keeps its CRT-tuned chunky look instead of stretching, video fills the box's full height with the picture modes (Zoom 4:3 / Stretch) working, and playback costs the same CPU as a CRT setup with the recommended config (`video_mode=7` + `fb_size=2` — see the [display compatibility guide](docs/DISPLAY_COMPATIBILITY.md#hdmi-tv)). Confirmed on a 4K TV and a Blackmagic capture card at 720p50. All analog/CRT output paths are untouched
 
 ### <a id="v1-0-0"></a>v1.0.0
 - Fixed choppy video playback when a title's frame rate doesn't match the display's (e.g. NTSC-rate content on a PAL setup)

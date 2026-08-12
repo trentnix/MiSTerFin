@@ -19,6 +19,7 @@ This doc tracks combos we've actually verified, plus the exact `MiSTer.ini` keys
   - [Setup](#interlaced-setup)
   - [Direct Video Adapter (HDMI-to-VGA DAC)](#hdmi-vga-dac)
   - [Notes](#interlaced-notes)
+- [Confirmed: HDMI → modern TV or capture card (720p)](#hdmi-tv)
 - [Untested / reported problem combos](#untested-combos)
 
 ---
@@ -234,12 +235,38 @@ Izzie Walton (@iwalton3) built a **standalone interlaced menu core** that adds t
 
 ---
 
+## <a id="hdmi-tv"></a>✅ Confirmed: HDMI → modern TV or capture card (720p)
+
+**Chain:** MiSTer main board HDMI output → a modern flat-panel TV (confirmed on a 4K set), or a Blackmagic Intensity Shuttle capture device. Requires a MiSTerFin build newer than v1.0.0 — older builds crash outright on an HDMI-native framebuffer (issue #19).
+
+**Recommended `MiSTer.ini` settings:**
+
+```ini
+video_mode=7           ; 1280x720@50 — matches PAL content's 25fps cadence; use 0 (1280x720@60) in 60Hz land
+fb_size=2              ; framebuffer at HALF the output (640x360) — the FPGA scaler upscales to the full
+                       ; 720p output in hardware, for free, so video fills the screen at the same CPU cost
+                       ; as a CRT setup. Confirmed load-bearing for playback performance.
+vga_scaler=0
+direct_video=0
+forced_scandoubler=0
+```
+
+**And no `[Menu]`-scoped `video_mode` override** — that custom modeline is the CRT setups' thing; here the framebuffer should follow the plain HDMI mode.
+
+**What you get:** the whole experience presented as a centered 4:3 box inside the 16:9 frame, black pillars either side — like a 4:3 broadcast. The UI keeps its CRT-tuned chunky look (tall pixels, not a stretched 16:9 spread), video fills the box's full height (widescreen titles letterboxed inside it, exactly like a real 4:3 set), and the picture modes (Zoom 4:3 / Stretch) work. Leave the TV's aspect setting on **16:9/Normal** — the signal is already pillarboxed, a TV-side 4:3 mode would double-process it.
+
+**Without `fb_size=2`** (a full-size 720p/1080p framebuffer) it still works, with a lesser fallback: the UI scales into the same 4:3 box, but video plays in a smaller centered 640x480 window — scaling video across the full canvas in software was measured to outrun the CPU, so it deliberately isn't attempted.
+
+**Capture-card notes (Blackmagic Intensity Shuttle):** these accept broadcast formats only — 720p50/59.94/60, 1080i, 1080p up to 30, NTSC/PAL — and reject VESA-style modes outright, so `video_mode=6` (640x480) gives a black "no input" even though a TV shows it fine. Use 720p (`video_mode=7` or `0`), select the exactly-matching input format in the capture software, and check that the input connector is set to HDMI in Desktop Video Setup (analog is a common default).
+
+**Status:** confirmed on real hardware (4K TV over HDMI, and Blackmagic Intensity Shuttle capture at 720p50) — 2026-08-12.
+
+---
+
 ## <a id="untested-combos"></a>Untested / reported problem combos
 
 *(to fill in as we verify or get reports)*
 
-- HDMI direct to a modern TV/monitor
-- HDMI → Blackmagic-style capture card (see the aspect-ratio caveat below — MiSTer stretches a Script's framebuffer to fill the target `video_mode` canvas with no aspect correction, unlike FPGA cores)
 - Component (YPbPr) via a passive VGA-to-component adapter, i.e. **without** the official Analog I/O board (**likely does NOT work** — these adapters just rewire pins, they don't do the RGB→YPbPr color-space conversion; confirmed this produces "no sync" on at least one display we tried)
 - NTSC over SCART/RGB (NTSC is only confirmed over Component so far — see above)
 - Direct Video Adapter (HDMI-to-VGA DAC) for **component** output specifically — RGB mode is now confirmed, see "True interlaced output" above
