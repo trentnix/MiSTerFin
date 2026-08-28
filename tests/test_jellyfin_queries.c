@@ -61,6 +61,23 @@ static void test_music_query(void)
         "&ImageTypeLimit=1&EnableImageTypes=Primary&StartIndex=5&Limit=64");
 }
 
+static void test_music_video_query(void)
+{
+    JfConfig cfg = config();
+    char path[512];
+
+    jf_build_items_path(&cfg, "music-video-view", "musicvideos", 7, 50,
+                        path, sizeof(path));
+
+    CHECK_PATH("music-video query", path,
+        "/Items?userId=user-id&ParentId=music-video-view"
+        "&Recursive=true&IncludeItemTypes=MusicVideo"
+        "&SortBy=SortName&SortOrder=Ascending"
+        "&Fields=ProductionYear,RunTimeTicks"
+        "&EnableUserData=true"
+        "&ImageTypeLimit=1&EnableImageTypes=Primary&StartIndex=7&Limit=50");
+}
+
 static void test_standard_query(void)
 {
     JfConfig cfg = config();
@@ -101,12 +118,26 @@ static void test_input_normalization(void)
         "&ImageTypeLimit=1&EnableImageTypes=Primary&StartIndex=0&Limit=9");
 }
 
+static void test_collection_item_types(void)
+{
+    CHECK_PATH("movie collection item type",
+               collection_item_type("movies"), "Movie");
+    CHECK_PATH("TV collection item type",
+               collection_item_type("tvshows"), "Series");
+    CHECK_PATH("music collection item type",
+               collection_item_type("music"), "MusicAlbum");
+    CHECK_PATH("music-video collection item type",
+               collection_item_type("musicvideos"), "MusicVideo");
+}
+
 int main(void)
 {
     test_movie_query();
     test_music_query();
+    test_music_video_query();
     test_standard_query();
     test_input_normalization();
+    test_collection_item_types();
 
     printf("jellyfin queries: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

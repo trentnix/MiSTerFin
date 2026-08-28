@@ -1534,7 +1534,8 @@ static const char *browse_cover_wanted_id(void)
 {
     JfItem *it = (g_item_count > 0) ? &g_items[g_sel] : NULL;
     int wants = it && it->image_tag[0] &&
-        (it->type == JF_TYPE_MOVIE || it->type == JF_TYPE_EPISODE ||
+        (it->type == JF_TYPE_MOVIE || it->type == JF_TYPE_MUSIC_VIDEO ||
+         it->type == JF_TYPE_EPISODE ||
          it->type == JF_TYPE_SERIES || it->type == JF_TYPE_SEASON ||
          it->type == JF_TYPE_ARTIST || it->type == JF_TYPE_ALBUM || it->type == JF_TYPE_TRACK);
     return wants ? it->id : "";
@@ -1600,7 +1601,8 @@ static void start_cover_prefetch(void)
     for (int i = 0; i < g_item_count && cp->n < JF_PAGE_SIZE; i++) {
         JfItem *it = &g_items[i];
         int wants = it->image_tag[0] &&
-            (it->type == JF_TYPE_MOVIE || it->type == JF_TYPE_EPISODE ||
+            (it->type == JF_TYPE_MOVIE || it->type == JF_TYPE_MUSIC_VIDEO ||
+             it->type == JF_TYPE_EPISODE ||
              it->type == JF_TYPE_SERIES || it->type == JF_TYPE_SEASON ||
              it->type == JF_TYPE_ARTIST || it->type == JF_TYPE_ALBUM || it->type == JF_TYPE_TRACK);
         if (!wants) continue;
@@ -1729,6 +1731,8 @@ static void carousel_format_count(const JfItem *it, int64_t count, char *buf, si
         snprintf(buf, bufsz, "%lld series", (long long)count);
     else if (!strcmp(ct, "music"))
         snprintf(buf, bufsz, "%lld album%s", (long long)count, count == 1 ? "" : "s");
+    else if (!strcmp(ct, "musicvideos"))
+        snprintf(buf, bufsz, "%lld video%s", (long long)count, count == 1 ? "" : "s");
     else
         snprintf(buf, bufsz, "%lld item%s", (long long)count, count == 1 ? "" : "s");
 }
@@ -2004,7 +2008,8 @@ static void draw_browse(FBDev *fb)
 
         char line1[280];
         if (it->year[0] &&
-            (it->type == JF_TYPE_MOVIE || it->type == JF_TYPE_SERIES))
+            (it->type == JF_TYPE_MOVIE || it->type == JF_TYPE_MUSIC_VIDEO ||
+             it->type == JF_TYPE_SERIES))
             snprintf(line1, sizeof(line1), "%s%s (%s)", type_folder_icon(it->type), it->name, it->year);
         else
             snprintf(line1, sizeof(line1), "%s%s", type_folder_icon(it->type), it->name);
@@ -2013,9 +2018,8 @@ static void draw_browse(FBDev *fb)
         /* Album: year + track count instead of a runtime — there's no
          * single "duration" for a whole album. Track: just its own
          * duration — no watched/resume state, which doesn't make sense for
-         * an individual song the way it does for a movie/episode. Movie/
-         * episode: unchanged runtime + watched/resume, per user request to
-         * leave those as they were. */
+         * an individual song the way it does for a video. Movie, music video,
+         * and episode rows show runtime plus watched/resume state. */
         char line2[64] = {0};
         uint8_t l2r = 0x58, l2g = 0x58, l2b = 0x58;
         if (it->type == JF_TYPE_ALBUM) {
@@ -2047,7 +2051,8 @@ static void draw_browse(FBDev *fb)
             else if (it->child_count > 0)
                 snprintf(line2, sizeof(line2), "%d season%s",
                          it->child_count, it->child_count == 1 ? "" : "s");
-        } else if (it->type == JF_TYPE_MOVIE || it->type == JF_TYPE_EPISODE) {
+        } else if (it->type == JF_TYPE_MOVIE || it->type == JF_TYPE_MUSIC_VIDEO ||
+                   it->type == JF_TYPE_EPISODE) {
             int minutes = (int)(it->runtime_ticks / 10000000LL / 60);
             if (it->played) {
                 snprintf(line2, sizeof(line2), "%d min - watched", minutes);
@@ -5426,6 +5431,7 @@ int main(int argc, char **argv)
                     break;
                 }
                 case JF_TYPE_MOVIE:
+                case JF_TYPE_MUSIC_VIDEO:
                 case JF_TYPE_EPISODE:
                     info_assets_load(&fb, it, &spinner_frame_ctr);
                     state = STATE_INFO;

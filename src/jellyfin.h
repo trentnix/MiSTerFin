@@ -41,6 +41,7 @@ typedef enum {
     JF_TYPE_SEASON,
     JF_TYPE_EPISODE,
     JF_TYPE_MOVIE,
+    JF_TYPE_MUSIC_VIDEO, /* MusicVideo — playable video leaf */
     JF_TYPE_ARTIST,   /* MusicArtist — drills into albums, browsed like JF_TYPE_FOLDER */
     JF_TYPE_ALBUM,    /* MusicAlbum — drills into tracks, browsed like JF_TYPE_FOLDER */
     JF_TYPE_TRACK,    /* Audio — playable leaf, like JF_TYPE_MOVIE but audio-only */
@@ -356,9 +357,10 @@ int jf_list_views(const JfConfig *cfg, JfItem *out, int max);
 int64_t jf_count_items(const JfConfig *cfg, const char *parent_id, const char *item_type);
 
 /* Items under parent_id (a view, a folder, ...), starting at start_index —
- * one window of a potentially much longer list. Movie libraries are searched
- * recursively and filtered to Movie. Music and other collection types list
- * direct children, with type-specific fields for the counts their rows use.
+ * one window of a potentially much longer list. Movie and music-video
+ * libraries are searched recursively and filtered to their respective item
+ * types. Music and other collection types list direct children, with
+ * type-specific fields for the counts their rows use.
  * Writes the server's untruncated TotalRecordCount to *total_out (may be
  * NULL), which lets the caller distinguish "that's the whole library" from
  * "that's all that fit".

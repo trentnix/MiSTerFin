@@ -284,6 +284,7 @@ static void parse_item_fields(const JsonDoc *doc, const JsonNode *item, JfItem *
     else if (!strcmp(type_buf, "Season"))        it->type = JF_TYPE_SEASON;
     else if (!strcmp(type_buf, "Episode"))       it->type = JF_TYPE_EPISODE;
     else if (!strcmp(type_buf, "Movie"))         it->type = JF_TYPE_MOVIE;
+    else if (!strcmp(type_buf, "MusicVideo"))    it->type = JF_TYPE_MUSIC_VIDEO;
     else if (!strcmp(type_buf, "MusicArtist"))   it->type = JF_TYPE_ARTIST;
     else if (!strcmp(type_buf, "MusicAlbum"))    it->type = JF_TYPE_ALBUM;
     else if (!strcmp(type_buf, "Audio"))         it->type = JF_TYPE_TRACK;
@@ -1265,6 +1266,17 @@ void jf_build_items_path(const JfConfig *cfg, const char *parent_id,
             "&EnableUserData=true"
             "&ImageTypeLimit=1&EnableImageTypes=Primary&StartIndex=%d&Limit=%d",
             cfg->user_id, safe_parent, start_index, max);
+    /* Music-video libraries use the same flat browsing model as movies.
+     * Search recursively and filter to MusicVideo so intermediate folders do
+     * not appear. Rows display year and runtime, but neither count field. */
+    else if (collection_type && !strcmp(collection_type, "musicvideos"))
+        snprintf(path, path_size,
+            "/Items?userId=%s&ParentId=%s&Recursive=true&IncludeItemTypes=MusicVideo"
+            "&SortBy=SortName&SortOrder=Ascending"
+            "&Fields=ProductionYear,RunTimeTicks"
+            "&EnableUserData=true"
+            "&ImageTypeLimit=1&EnableImageTypes=Primary&StartIndex=%d&Limit=%d",
+            cfg->user_id, safe_parent, start_index, max);
     /* Music keeps MiSTerFin's artist -> album -> track hierarchy, so list
      * direct children instead of flattening the library recursively. Keep
      * ChildCount for the album/track totals shown on artist and album rows.
@@ -1861,8 +1873,9 @@ int view_is_synthetic(const JfItem *v) { return v->synthetic != 0; }
 
 const char *collection_item_type(const char *collection_type)
 {
-    if (!strcmp(collection_type, "movies"))  return "Movie";
-    if (!strcmp(collection_type, "tvshows")) return "Series";
-    if (!strcmp(collection_type, "music"))   return "MusicAlbum";
+    if (!strcmp(collection_type, "movies"))      return "Movie";
+    if (!strcmp(collection_type, "tvshows"))     return "Series";
+    if (!strcmp(collection_type, "music"))       return "MusicAlbum";
+    if (!strcmp(collection_type, "musicvideos")) return "MusicVideo";
     return NULL;
 }
