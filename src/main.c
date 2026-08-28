@@ -384,6 +384,7 @@ typedef struct {
     FrameKind kind;
     char      title[128];
     char      parent_id[JF_ID_LEN];  /* FRAME_ITEMS */
+    char      collection_type[16];   /* FRAME_ITEMS; inherited through folders */
     char      series_id[JF_ID_LEN];  /* FRAME_SEASONS / FRAME_EPISODES */
     char      season_id[JF_ID_LEN];  /* FRAME_EPISODES */
 } BrowseFrame;
@@ -726,7 +727,7 @@ static int fetch_frame_window(int start_index)
          * RecursiveItemCount, which the server computes for the whole
          * result set in a single batched query. See JfItem's own comment. */
         paginated = 1;
-        g_item_count = jf_list_items(&g_cfg, f->parent_id, start_index,
+        g_item_count = jf_list_items(&g_cfg, f->parent_id, f->collection_type, start_index,
                                       g_items, JF_PAGE_SIZE, &g_total_count);
         break;
     case FRAME_SEASONS:
@@ -791,7 +792,8 @@ static void fetch_frame(void)
 }
 
 static void push_frame(FrameKind kind, const char *title,
-                        const char *parent_id, const char *series_id, const char *season_id)
+                        const char *parent_id, const char *series_id, const char *season_id,
+                        const char *collection_type)
 {
     if (g_stack_depth >= MAX_STACK) return;
     BrowseFrame *f = &g_stack[g_stack_depth++];
@@ -801,6 +803,8 @@ static void push_frame(FrameKind kind, const char *title,
     if (parent_id) strncpy(f->parent_id, parent_id, sizeof(f->parent_id) - 1);
     if (series_id) strncpy(f->series_id, series_id, sizeof(f->series_id) - 1);
     if (season_id) strncpy(f->season_id, season_id, sizeof(f->season_id) - 1);
+    if (collection_type)
+        strncpy(f->collection_type, collection_type, sizeof(f->collection_type) - 1);
     fetch_frame();
 }
 
@@ -4486,7 +4490,7 @@ static int run_preview_browse(int sel, int list_mode)
     grid_init(&g_cfg);
 
     g_root_list_mode = list_mode;
-    push_frame(FRAME_VIEWS, "MiSTerFin", NULL, NULL, NULL);
+    push_frame(FRAME_VIEWS, "MiSTerFin", NULL, NULL, NULL, NULL);
     if (sel >= 0 && sel < g_item_count) g_sel = sel;
 
     draw_browse(&fb);
@@ -4703,7 +4707,7 @@ static int g_startup_result = STARTUP_PENDING;
  * minutes later and from a different thread. */
 static void startup_enter_browse(void)
 {
-    push_frame(FRAME_VIEWS, "MiSTerFin", NULL, NULL, NULL);
+    push_frame(FRAME_VIEWS, "MiSTerFin", NULL, NULL, NULL, NULL);
 }
 
 static void *startup_resolve_thread(void *arg)
@@ -5391,11 +5395,12 @@ int main(int argc, char **argv)
                     /* The two home rows look like folders but have no parent
                      * to list — they're their own kind of frame. */
                     if (view_is_resume(it))
-                        push_frame(FRAME_RESUME, "Continue Watching", NULL, NULL, NULL);
+                        push_frame(FRAME_RESUME, "Continue Watching", NULL, NULL, NULL, NULL);
                     else if (view_is_nextup(it))
-                        push_frame(FRAME_NEXTUP, "Next Up", NULL, NULL, NULL);
+                        push_frame(FRAME_NEXTUP, "Next Up", NULL, NULL, NULL, NULL);
                     else
-                        push_frame(FRAME_ITEMS, it->name, it->id, NULL, NULL);
+                        push_frame(FRAME_ITEMS, it->name, it->id, NULL, NULL,
+                                   it->collection_type[0] ? it->collection_type : f->collection_type);
                     nav = 1;
                     break;
                 case JF_TYPE_ALBUM: {
@@ -5404,19 +5409,19 @@ int main(int argc, char **argv)
                      * so no extra field lookup needed. */
                     char combined[128];
                     snprintf(combined, sizeof(combined), "%s / %s", f->title, it->name);
-                    push_frame(FRAME_ITEMS, combined, it->id, NULL, NULL);
+                    push_frame(FRAME_ITEMS, combined, it->id, NULL, NULL, f->collection_type);
                     nav = 1;
                     break;
                 }
                 case JF_TYPE_SERIES:
-                    push_frame(FRAME_SEASONS, it->name, NULL, it->id, NULL);
+                    push_frame(FRAME_SEASONS, it->name, NULL, it->id, NULL, NULL);
                     nav = 1;
                     break;
                 case JF_TYPE_SEASON: {
                     /* "Series / Season", same pattern as Artist / Album. */
                     char combined[128];
                     snprintf(combined, sizeof(combined), "%s / %s", f->title, it->name);
-                    push_frame(FRAME_EPISODES, combined, NULL, f->series_id, it->id);
+                    push_frame(FRAME_EPISODES, combined, NULL, f->series_id, it->id, NULL);
                     nav = 1;
                     break;
                 }

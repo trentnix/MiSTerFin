@@ -1240,31 +1240,64 @@ static void parse_total_count(const JsonDoc *doc, int64_t *total_out)
     if (n && n->type == JSON_NUMBER) *total_out = n->i64;
 }
 
-int jf_list_items(const JfConfig *cfg, const char *parent_id, int start_index,
-                   JfItem *out, int max, int64_t *total_out)
+/* Builds the paginated item-list path for a library or folder, selecting the
+ * fields and traversal rules appropriate to its collection type. Overview is
+ * deliberately omitted because browse rows never display it. The info screen
+ * fetches it separately through jf_get_item_details(). */
+void jf_build_items_path(const JfConfig *cfg, const char *parent_id,
+                         const char *collection_type, int start_index, int max,
+                         char *path, size_t path_size)
 {
     char safe_parent[JF_ID_LEN];
     jf_sanitize_id(parent_id, safe_parent, sizeof(safe_parent));
     if (start_index < 0) start_index = 0;
 
-    /* ChildCount here (unlike on a top-level library view — see
-     * jf_count_items's comment) is exactly what it sounds like for a
-     * MusicAlbum: its own track count, confirmed against a real server. */
-    /* Overview is deliberately NOT requested here even though JfItem has a
-     * field for it: no browse-list row ever displays it (the info screen
-     * re-fetches via jf_get_item_details, which is where overview actually
-     * comes from), so it would be several times the JSON per row for nothing.
-     * Response size no longer risks losing data the way it once did — buffers
-     * grow to fit and a short read is now a hard parse failure — but there's
-     * still no reason to transfer and parse a paragraph per row that nothing
-     * reads. */
+    /* Movie libraries can contain intermediate folders, but the browse view
+     * presents a flat movie list. Search recursively and filter to Movie so
+     * folders and other descendants do not appear. Movie rows display year
+     * and runtime, but neither count field, and asking Jellyfin for those
+     * counts can make a large library exceed the request timeout. */
+    if (collection_type && !strcmp(collection_type, "movies"))
+        snprintf(path, path_size,
+            "/Items?userId=%s&ParentId=%s&Recursive=true&IncludeItemTypes=Movie"
+            "&SortBy=SortName&SortOrder=Ascending"
+            "&Fields=ProductionYear,RunTimeTicks"
+            "&EnableUserData=true"
+            "&ImageTypeLimit=1&EnableImageTypes=Primary&StartIndex=%d&Limit=%d",
+            cfg->user_id, safe_parent, start_index, max);
+    /* Music keeps MiSTerFin's artist -> album -> track hierarchy, so list
+     * direct children instead of flattening the library recursively. Keep
+     * ChildCount for the album/track totals shown on artist and album rows.
+     * RecursiveItemCount is not displayed for music, and computing it across
+     * a large library can make Jellyfin exceed the request timeout. */
+    else if (collection_type && !strcmp(collection_type, "music"))
+        snprintf(path, path_size,
+            "/Items?userId=%s&ParentId=%s&SortBy=SortName&SortOrder=Ascending"
+            "&Fields=ProductionYear,RunTimeTicks,ChildCount"
+            "&EnableUserData=true"
+            "&ImageTypeLimit=1&EnableImageTypes=Primary&StartIndex=%d&Limit=%d",
+            cfg->user_id, safe_parent, start_index, max);
+    /* TV and other collection types keep the standard direct-child query.
+     * Series rows use ChildCount for seasons and RecursiveItemCount for
+     * episodes, both computed in this batched listing instead of separate
+     * requests per series. Unknown collection types retain the established
+     * fields and behavior rather than assuming movie or music semantics. */
+    else
+        snprintf(path, path_size,
+            "/Items?userId=%s&ParentId=%s&SortBy=SortName&SortOrder=Ascending"
+            "&Fields=ProductionYear,RunTimeTicks,ChildCount,RecursiveItemCount"
+            "&EnableUserData=true"
+            "&ImageTypeLimit=1&EnableImageTypes=Primary&StartIndex=%d&Limit=%d",
+            cfg->user_id, safe_parent, start_index, max);
+}
+
+int jf_list_items(const JfConfig *cfg, const char *parent_id,
+                   const char *collection_type, int start_index,
+                   JfItem *out, int max, int64_t *total_out)
+{
     char path[512];
-    snprintf(path, sizeof(path),
-        "/Items?userId=%s&ParentId=%s&SortBy=SortName&SortOrder=Ascending"
-        "&Fields=ProductionYear,RunTimeTicks,ChildCount,RecursiveItemCount"
-        "&EnableUserData=true"
-        "&ImageTypeLimit=1&EnableImageTypes=Primary&StartIndex=%d&Limit=%d",
-        cfg->user_id, safe_parent, start_index, max);
+    jf_build_items_path(cfg, parent_id, collection_type, start_index, max,
+                        path, sizeof(path));
 
     JfResponse r;
     if (!jf_fetch(cfg, path, &r)) return -1;   /* transport/parse failure, not an empty page */

@@ -355,18 +355,27 @@ int jf_list_views(const JfConfig *cfg, JfItem *out, int max);
  * root folder has exactly 1 direct child). Returns -1 on failure. */
 int64_t jf_count_items(const JfConfig *cfg, const char *parent_id, const char *item_type);
 
-/* Direct children of parent_id (a view, a folder, ...), starting at
- * start_index — one window of a potentially much longer list. Writes the
- * server's untruncated TotalRecordCount to *total_out (may be NULL), which
- * is what lets the caller know there's more to page to; without it a client
- * cannot tell "that's the whole library" from "that's all that fit".
+/* Items under parent_id (a view, a folder, ...), starting at start_index —
+ * one window of a potentially much longer list. Movie libraries are searched
+ * recursively and filtered to Movie. Music and other collection types list
+ * direct children, with type-specific fields for the counts their rows use.
+ * Writes the server's untruncated TotalRecordCount to *total_out (may be
+ * NULL), which lets the caller distinguish "that's the whole library" from
+ * "that's all that fit".
  *
  * Returns the number of items, or -1 if the request itself failed. That's a
  * distinct value from 0 on purpose: a caller sliding a window has to roll
  * back to the page it already had rather than commit an empty one, and an
  * empty page is a legitimate answer it must not confuse with a dead network. */
-int jf_list_items(const JfConfig *cfg, const char *parent_id, int start_index,
+int jf_list_items(const JfConfig *cfg, const char *parent_id,
+                   const char *collection_type, int start_index,
                    JfItem *out, int max, int64_t *total_out);
+
+/* Builds the request path used by jf_list_items. Exposed so the type-specific
+ * query can be unit-tested without contacting a Jellyfin server. */
+void jf_build_items_path(const JfConfig *cfg, const char *parent_id,
+                         const char *collection_type, int start_index, int max,
+                         char *path, size_t path_size);
 
 /* Same shape as jf_list_items but recursive, and filtered to item_type if
  * non-NULL/non-empty (a BaseItemKind string, e.g. "MusicAlbum"). Used by
