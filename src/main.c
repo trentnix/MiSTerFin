@@ -1926,26 +1926,38 @@ static void carousel_slide_animate(FBDev *fb, int old_sel, int new_sel)
 {
     int cy = carousel_cy(fb);
     int switched = 0;
+    double slide_t0 = now_sec();
     for (int s = 1; s <= CAROUSEL_SLIDE_STEPS; s++) {
         double t = (double)s / CAROUSEL_SLIDE_STEPS;
         double visual = old_sel + (new_sel - old_sel) * carousel_ease(t);
-        double fade_t = (t <= 0.5) ? (t / 0.5) : (1.0 - (t - 0.5) / 0.5);
-        uint8_t black_alpha = (uint8_t)(255 * fade_t);
 
-        if (!switched && t >= 0.5) {
+        /* The background used to cross-fade through full black, switching
+         * libraries at the midpoint where nothing was visible — which is what
+         * the sideways push replaced. Leaving the fade in put a hard black
+         * blink at the start of every push, one hiding the other. Switched at
+         * the first step instead of the midpoint, so the push starts with the
+         * slide rather than halfway through it. */
+        if (!switched) {
             grid_covers_sync(fb, &g_items[new_sel]);
             switched = 1;
         }
 
         fb_clear(fb);
         draw_grid_background(fb);
-        fb_fill_rect_alpha(fb, 0, 0, fb->width, fb->height, 0, 0, 0, black_alpha);
         draw_grid_gradient(fb);
         draw_top_bar(fb, "MiSTerFin");
         draw_carousel_update_notice(fb);
         draw_carousel_cards(fb, visual, cy);
         draw_carousel_hint(fb);
         fb_flip(fb);
+
+        /* Hold this step until its slot in the 60Hz timeline. When vsync
+         * works, fb_flip already blocked past this and the wait is a no-op.
+         * When it does not, this is what makes the slide a slide rather than
+         * six frames drawn as fast as the mosaic happens to allow. */
+        double step_target = slide_t0 + (double)s / 60.0;
+        double step_left   = step_target - now_sec();
+        if (step_left > 0.0) usleep((useconds_t)(step_left * 1000000.0));
     }
 }
 
