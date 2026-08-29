@@ -399,6 +399,12 @@ static int         g_stack_depth = 0;
 static JfItem g_items[JF_MAX_ITEMS];
 static int    g_item_count = 0;
 static int    g_sel = 0, g_scroll = 0;
+/* Where the selection highlight actually IS, in visible-row units, as
+ * distinct from g_sel where it is headed — see draw_browse's own comment.
+ * Negative means "no position yet, put it wherever the selection is", which
+ * is what a fresh frame wants: gliding in from the last screen's row would
+ * read as the bar chasing the cursor rather than following it. */
+static double g_sel_anim = -1.0;
 /* g_items[] holds one window of the current frame's list rather than the
  * whole thing — libraries can be far larger than any buffer we'd want to
  * keep resident, and the previous fixed Limit=JF_MAX_ITEMS silently
@@ -780,6 +786,7 @@ static void fetch_frame(void)
     g_cover_gen++;                 /* invalidate any prefetch for the old list */
     BrowseFrame *f = &g_stack[g_stack_depth - 1];
     g_sel = 0; g_scroll = 0;
+    g_sel_anim = -1.0;             /* new list — place the bar, don't glide to it */
     /* Returning to the root screen (B all the way back out of a library)
      * should land on whichever library you drilled into, not always snap
      * back to the first one — g_root_sel is kept up to date by the
@@ -1979,7 +1986,7 @@ static void draw_browse(FBDev *fb)
 
     int cover_panel_x = fb->width - SAFE_X - BROWSE_COVER_W;
     /* -3 lines the panel's top up with the first row's selection highlight
-     * top (that highlight starts at y-3, see the is_sel rect below) —
+     * top (that highlight starts at sel_y-3, see the glide block below) —
      * fixed offset, the panel itself always stays put top-right regardless
      * of which row is actually selected. */
     int cover_panel_y = SAFE_Y + 24 - 3;
@@ -2012,6 +2019,46 @@ static void draw_browse(FBDev *fb)
     int visible = visible_rows(fb);
     int end = g_scroll + visible;
     if (end > g_item_count) end = g_item_count;
+
+    /* The highlight glides to the selected row instead of jumping to it, and
+     * is drawn ONCE here rather than inside the row loop — mid-glide it sits
+     * between two rows, so it no longer belongs to any single one of them.
+     * Rows draw their text afterwards and therefore still land on top of it.
+     *
+     * Tracked in visible-row units (g_sel - g_scroll), which is what makes
+     * scrolling behave: once the cursor reaches the bottom row the list
+     * scrolls under it and that difference stops changing, so the bar
+     * correctly stays put instead of trying to walk off the screen.
+     *
+     * dt is real elapsed time rather than a per-call constant because
+     * draw_browse's own tick rate is not fixed (the grid mosaic background
+     * costs several times what a plain list row does), and it is clamped at
+     * both ends: the list is redrawn continuously while anything is moving,
+     * but a screen sitting idle can go a long time between redraws and one
+     * huge dt would make the next keypress snap instead of glide. */
+    {
+        double target = (double)(g_sel - g_scroll);
+        if (g_sel_anim < 0.0 || fabs(target - g_sel_anim) > (double)visible) {
+            /* First draw of this list, or a jump too far to read as motion
+             * (a page-sized move — see browse_move_sel). */
+            g_sel_anim = target;
+        } else {
+            static double prev_t = 0.0;
+            double now = now_sec();
+            double dt  = (prev_t > 0.0) ? now - prev_t : 0.0;
+            prev_t = now;
+            if (dt < 0.0)  dt = 0.0;      /* clock went backwards */
+            if (dt > 0.05) dt = 0.05;     /* returning from an idle screen */
+            double k = 1.0 - exp(-dt / 0.055);   /* ~95% of the way in 0.16s */
+            g_sel_anim += (target - g_sel_anim) * k;
+            /* Settle exactly, so an idle list stops redrawing a bar that is
+             * one hundredth of a pixel from where it belongs. */
+            if (fabs(target - g_sel_anim) < 0.01) g_sel_anim = target;
+        }
+        int sel_y = SAFE_Y + 24 + (int)(g_sel_anim * ROW_H + 0.5);
+        fb_fill_rect_alpha(fb, SAFE_X - 4, sel_y - 3,
+                           row_max_w + 8, ROW_H - 2, COL_SEL_BG, 220);
+    }
 
     for (int i = g_scroll; i < end; i++) {
         int row = i - g_scroll;
@@ -2080,9 +2127,9 @@ static void draw_browse(FBDev *fb)
         }
         truncate_to_width(fb, line2, 1, row_max_w);
 
+        /* The highlight itself is drawn above, before this loop — all that is
+         * left per row is which colour its text takes. */
         if (is_sel) {
-            fb_fill_rect_alpha(fb, SAFE_X - 4, y - 3,
-                               row_max_w + 8, ROW_H - 2, COL_SEL_BG, 220);
             draw_text(fb, SAFE_X, y, line1, 1, COL_SEL_FG);
             if (line2[0]) draw_text(fb, SAFE_X, y + 11, line2, 1, l2r, l2g, l2b);
         } else {
