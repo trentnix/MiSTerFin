@@ -525,8 +525,12 @@ static void info_assets_load(FBDev *fb, const JfItem *list_item, int *spinner_fr
 
     draw_spinner_frame(fb, (*spinner_frame)++); fb_flip(fb);
     if (g_info_item.logo_tag[0]) {
+        /* 480, not 400: draw_info caps the drawn logo width at exactly 480
+         * (see its `dw > 480` clamp), so a 400px source was being upscaled
+         * on any wide logo — the one place in the UI that was asking the
+         * server for less than it draws. */
         int dl_ok = jf_download_item_image(&g_cfg, g_info_item.logo_item_id, "Logo",
-                                            g_info_item.logo_tag, 400, POSTER_TMP);
+                                            g_info_item.logo_tag, 480, POSTER_TMP);
         if (dl_ok)
             g_logo_px = load_image_tmp(POSTER_TMP, &g_logo_w, &g_logo_h);
     }
@@ -1482,6 +1486,14 @@ static void draw_quick_connect(FBDev *fb)
  * this smaller corner panel). */
 #define BROWSE_COVER_W 175
 #define BROWSE_COVER_H 140
+/* Source width asked of the server for that panel. Sized to the panel and no
+ * larger on purpose: fb_blit samples nearest-neighbour (no averaging), so a
+ * source well above its destination does not soften the downscale, it just
+ * drops different pixels — supersampling only pays once there is a filter to
+ * pay it. Kept a touch over BROWSE_COVER_W because the box bounds both axes
+ * and blit_fit_centered may fit to the height instead, leaving the drawn
+ * width short of the full 175. */
+#define BROWSE_COVER_DL_W 180
 
 static uint8_t *g_browse_cover_px = NULL;
 static int      g_browse_cover_w = 0, g_browse_cover_h = 0;
@@ -1489,7 +1501,11 @@ static char     g_browse_cover_item_id[JF_ID_LEN] = "";
 
 /* Cache-file path for one item's cover on the SD card. Keyed by item id plus
  * a few chars of the image tag, so replacing the artwork server-side lands on
- * a new filename rather than serving stale art. */
+ * a new filename rather than serving stale art — and by the width it was
+ * fetched at, so changing BROWSE_COVER_DL_W re-fetches instead of serving the
+ * old size forever. Without that last part every card already in the wild
+ * keeps whatever resolution it first cached, which is a change that silently
+ * does nothing for existing users and works only on a fresh install. */
 static void cover_cache_path(const char *item_id, const char *tag, char *out, size_t outsz)
 {
     char safe[JF_ID_LEN + 12];
@@ -1504,7 +1520,7 @@ static void cover_cache_path(const char *item_id, const char *tag, char *out, si
         safe[j++] = isalnum((unsigned char)c) ? c : '_';
     }
     safe[j] = '\0';
-    snprintf(out, outsz, COVER_CACHE_DIR "/%s.img", safe);
+    snprintf(out, outsz, COVER_CACHE_DIR "/%s_w%d.img", safe, BROWSE_COVER_DL_W);
 }
 
 /* Downloads one cover into the SD cache if not already there. Downloads to a
@@ -1522,7 +1538,8 @@ static void cover_fetch_to_cache(const char *image_item_id, const char *tag,
     mkdir(COVER_CACHE_DIR, 0755);   /* ensure the dir exists for tmp + final */
     char tmp[176];
     snprintf(tmp, sizeof(tmp), "%s.tmp", cpath);
-    if (jf_download_item_image(&g_cfg, image_item_id, "Primary", tag, 180, tmp)) {
+    if (jf_download_item_image(&g_cfg, image_item_id, "Primary", tag,
+                                BROWSE_COVER_DL_W, tmp)) {
         if (rename(tmp, cpath) != 0) unlink(tmp);
     } else {
         unlink(tmp);

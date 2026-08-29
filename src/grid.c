@@ -117,7 +117,7 @@ static void grid_cell_order_shuffle(GridLibCache *gc)
 
 /* Turns a Jellyfin GUID view_id into a safe filename — GUIDs are already
  * hex+dashes so this is just a defensive fallback, not real sanitizing. */
-static void grid_cache_disk_path(const char *view_id, char *out, size_t outsz)
+static void grid_cache_disk_path(const char *view_id, int cell_w, char *out, size_t outsz)
 {
     char safe[JF_ID_LEN];
     size_t j = 0;
@@ -126,7 +126,12 @@ static void grid_cache_disk_path(const char *view_id, char *out, size_t outsz)
         safe[j++] = (isalnum((unsigned char)c) || c == '-') ? c : '_';
     }
     safe[j] = '\0';
-    snprintf(out, outsz, GRID_CACHE_DIR "/%s.dat", safe);
+    /* cell_w in the name, not just the item total: the covers are stored at
+     * whatever width the mosaic asked for, and the staleness check below only
+     * compares item counts — so without this, changing the fetch width (or
+     * simply switching to a display mode with a different cell size) would go
+     * on serving the old resolution off the card forever. */
+    snprintf(out, outsz, GRID_CACHE_DIR "/%s_w%d.dat", safe, cell_w);
 }
 
 /* Persisted grid cache survives an app restart — without it, every
@@ -140,13 +145,14 @@ static void grid_cache_disk_path(const char *view_id, char *out, size_t outsz)
  * Pixels are stored raw/uncompressed rather than re-encoded to JPEG (this
  * build's stb_image.h is decode-only, no encoder) — at most ~480KB per
  * library (12 covers * ~100x100x4 bytes), trivial for an SD card. */
-static int grid_cache_load_from_disk(GridLibCache *gc, const JfItem *view, const char *item_type)
+static int grid_cache_load_from_disk(GridLibCache *gc, const JfItem *view,
+                                    const char *item_type, int cell_w)
 {
     int64_t current_count = jf_count_items(s_cfg, view->id, item_type);
     if (current_count < 0) return 0;
 
     char path[300];
-    grid_cache_disk_path(view->id, path, sizeof(path));
+    grid_cache_disk_path(view->id, cell_w, path, sizeof(path));
     FILE *f = fopen(path, "rb");
     if (!f) return 0;
 
@@ -190,12 +196,13 @@ static int grid_cache_load_from_disk(GridLibCache *gc, const JfItem *view, const
     return gc->count > 0;
 }
 
-static void grid_cache_save_to_disk(const GridLibCache *gc, const char *view_id, int64_t count)
+static void grid_cache_save_to_disk(const GridLibCache *gc, const char *view_id,
+                                   int64_t count, int cell_w)
 {
     if (gc->count <= 0) return;
     mkdir(GRID_CACHE_DIR, 0755);   /* ignore EEXIST/already-there */
     char path[300];
-    grid_cache_disk_path(view_id, path, sizeof(path));
+    grid_cache_disk_path(view_id, cell_w, path, sizeof(path));
     FILE *f = fopen(path, "wb");
     if (!f) return;
 
@@ -266,9 +273,12 @@ static void grid_cache_populate(GridLibCache *gc, const JfItem *view,
      * one clip off the bottom rather than stretching everything to fit
      * an exact count. */
     gc->square = !strcmp(view->collection_type, "music");
+    /* Also the width each cover is fetched at (see the download below) and
+     * part of the disk cache's key, so it is computed once here rather than
+     * three times from fb->width. */
+    int cell_w = fb->width / GRID_COLS;
     {
         double target_ar = gc->square ? 1.0 : (2.0 / 3.0);
-        int    cell_w     = fb->width / GRID_COLS;
         double cell_h     = cell_w / (target_ar * par_correction(fb));
         if (cell_h < 1.0) cell_h = 1.0;
         /* Only the horizontal crawl needs a spare cell (for the wraparound
@@ -294,7 +304,7 @@ static void grid_cache_populate(GridLibCache *gc, const JfItem *view,
               ? jf_list_resume(s_cfg, grid_items, GRID_FETCH_MAX, NULL)
               : jf_list_nextup(s_cfg, grid_items, GRID_FETCH_MAX, NULL);
     } else {
-        if (grid_cache_load_from_disk(gc, view, item_type)) {
+        if (grid_cache_load_from_disk(gc, view, item_type, cell_w)) {
             grid_cell_order_shuffle(gc);
             grid_dim_covers(gc);
             /* Release: everything written above must be visible to any
@@ -310,8 +320,14 @@ static void grid_cache_populate(GridLibCache *gc, const JfItem *view,
     for (int i = 0; i < n && gc->count < GRID_FETCH_MAX; i++) {
         if (!grid_items[i].image_tag[0]) continue;
         if (show_ui) { draw_spinner_frame(fb, spinner_frame++); fb_flip(fb); }
+        /* cell_w, not a fixed 100: the mosaic draws each cover exactly
+         * cell_w wide (640/6 = 106 on a full-width canvas), so 100 was an
+         * upscale — the background was being built from less detail than it
+         * puts on screen. Sized to the cell and no further, because fb_blit
+         * samples nearest-neighbour: a bigger source would not smooth the
+         * downscale, only change which pixels survive it. */
         if (jf_download_item_image(s_cfg, grid_items[i].image_item_id, "Primary",
-                                    grid_items[i].image_tag, 100, dest_path)) {
+                                    grid_items[i].image_tag, cell_w, dest_path)) {
             uint8_t *px = load_image_tmp(dest_path, &gc->w[gc->count], &gc->h[gc->count]);
             if (px) gc->px[gc->count++] = px;
         }
@@ -319,7 +335,7 @@ static void grid_cache_populate(GridLibCache *gc, const JfItem *view,
     grid_cell_order_shuffle(gc);
     if (!view_is_synthetic(view)) {
         int64_t count = jf_count_items(s_cfg, view->id, item_type);
-        if (count >= 0) grid_cache_save_to_disk(gc, view->id, count);
+        if (count >= 0) grid_cache_save_to_disk(gc, view->id, count, cell_w);
     }
     grid_dim_covers(gc);
     __atomic_store_n(&gc->ready, 1, __ATOMIC_RELEASE);
