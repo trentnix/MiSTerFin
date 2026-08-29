@@ -356,6 +356,8 @@ Verified against a real Jellyfin 10.11 server: auth, browsing (views/items, incl
 - **UI sounds** — a click as the selection moves and a chime when something is chosen, mixed in-process by a background thread rather than a process spawned per keypress. The MiSTer's sound device isn't shareable, so clicks are silent for the length of a film or a track and come back when playback ends. `touch /media/fat/misterfin/no-sfx` turns them off without a rebuild
 - **The browse selection glides to its row** instead of jumping to it
 - Sharper cover art in two places that were quietly asking the server for less than they draw: the home carousel's mosaic background, and the info screen's logo. Both caches re-fetch once at the new size
+- **The selected title's backdrop now sits behind the browse list** — the same wide artwork the info screen leads with, in the same place, so drilling into a title continues a picture already on screen. Dimmed under a top-down wash so the list stays legible
+- **The home carousel pushes sideways between libraries** instead of blinking through black. The push was always there; the cross-fade was hiding the first half of it
 
 ### <a id="v1-0-1"></a>v1.0.1
 - Fixed video/music playback failing on an `https://` Jellyfin server — the bundled mplayer's FFmpeg has no TLS support, so the stream is now fetched with curl (which already handles HTTPS for every other request) into a FIFO and handed to mplayer that way. Plain `http://` setups are unaffected
