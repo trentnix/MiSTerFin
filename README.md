@@ -105,7 +105,7 @@ All captured in-app via the [SELECT+START screenshot combo](#controls), straight
 
 ## <a id="scope"></a>Scope (v1)
 
-- Movies, TV shows, and Music — no photo libraries
+- Movies, TV shows, Music, and Music Videos — no photo libraries
 - Server-side transcode for video (the MiSTer's ARM Cortex-A9 can't decode arbitrary HEVC/4K sources locally) to a CRT-sized stream, then letterboxed/pillarboxed client-side to exactly fill the PAL/NTSC frame
 - Audio plays back directly (`static=true`, no server transcode) — this mplayer build decodes FLAC/MP3 natively, and there's no letterboxing concern for audio the way there is for video
 
@@ -352,12 +352,17 @@ Verified against a real Jellyfin 10.11 server: auth, browsing (views/items, incl
 
 ## <a id="changelog"></a>Changelog
 
-### <a id="unreleased"></a>Unreleased
-- **UI sounds** — a click as the selection moves and a chime when something is chosen, mixed in-process by a background thread rather than a process spawned per keypress. The MiSTer's sound device isn't shareable, so clicks are silent for the length of a film or a track and come back when playback ends. `touch /media/fat/misterfin/no-sfx` turns them off without a rebuild
+### <a id="v1-1-0"></a>v1.1.0
+
+Thanks to **[@trentnix](https://github.com/trentnix)** for the library fixes and Music Videos support in this release — see [Credits](#credits).
+
+- **Fixed large Movies and Music libraries failing to open.** Opening one could exceed MiSTerFin's request timeout outright, because the listing asked Jellyfin to compute a child count and a recursive item count for every row — values those rows never display, and which cost the server a query each. The listing now asks only for what it draws, and movie libraries are traversed recursively so a library organised into subfolders returns its films rather than the folders. TV listings keep both counts, which is where they're actually shown. Measured under 600 ms on a library that previously timed out ([#28](https://github.com/puddingstudio/MiSTerFin/pull/28), @trentnix)
+- **Music Videos libraries are now supported** as a first-class library type: a flat list of videos with artwork, year, runtime, watched and resume state, and the full info screen ([#28](https://github.com/puddingstudio/MiSTerFin/pull/28), @trentnix)
+- **The selected title's backdrop now sits behind the browse list** — the same wide artwork the info screen leads with, in the same place, so drilling into a title continues a picture already on screen rather than replacing one. Dimmed under a top-down wash so the list stays legible, and composed once per selection instead of per frame so it costs nothing to scroll past
+- **UI sounds** — a click as the selection moves, a chime when something is chosen. Mixed in-process by a background thread rather than a process spawned per keypress, so the click lands on the button press instead of a beat after it. The MiSTer routes Linux audio through a single non-shareable FPGA pipe, so the sounds step aside while a film or track plays and return when it ends. `touch /media/fat/misterfin/no-sfx` disables them without a rebuild
 - **The browse selection glides to its row** instead of jumping to it
-- Sharper cover art in two places that were quietly asking the server for less than they draw: the home carousel's mosaic background, and the info screen's logo. Both caches re-fetch once at the new size
-- **The selected title's backdrop now sits behind the browse list** — the same wide artwork the info screen leads with, in the same place, so drilling into a title continues a picture already on screen. Dimmed under a top-down wash so the list stays legible
-- **The home carousel pushes sideways between libraries** instead of blinking through black. The push was always there; the cross-fade was hiding the first half of it
+- **The home carousel pushes sideways between libraries** instead of blinking through black. The sideways push was always there — the cross-fade was hiding the first half of it behind the blink
+- Sharper cover art in two places that were quietly asking the server for less than they draw: the home carousel's mosaic background and the info screen's logo. Both caches re-fetch once, in the background, at the new size
 
 ### <a id="v1-0-1"></a>v1.0.1
 - Fixed video/music playback failing on an `https://` Jellyfin server — the bundled mplayer's FFmpeg has no TLS support, so the stream is now fetched with curl (which already handles HTTPS for every other request) into a FIFO and handed to mplayer that way. Plain `http://` setups are unaffected
@@ -461,6 +466,10 @@ MiSTerFin made over the weekends at [Pudding Studio](https://pudding.studio).
 
 - Quick Connect sign-in, alternate audio track selection, Continue Watching / Next Up, the real JSON parser, large-library pagination, the subtitle handling improvements, a configurable transcode profile, the controller-reconnect hardening, an off-hardware test harness, and a thorough security-hardening pass — a substantial contribution, tested end-to-end on real hardware, in [#6](https://github.com/puddingstudio/MiSTerFin/pull/6)
 - True interlaced (480i/576i) output — a [standalone interlaced menu core](https://github.com/iwalton3/Menu_MiSTer/releases/tag/v0.0.1) that adds real scaler-level interlaced scanout without touching `Main_MiSTer` or your main `menu.rbf`. See the [display compatibility guide](docs/DISPLAY_COMPATIBILITY.md#interlaced-output) for setup
+
+**[Trent Nix (@trentnix)](https://github.com/trentnix)** — thank you:
+
+- Fixed the request timeouts that stopped large Movies and Music libraries from opening at all, by asking Jellyfin only for the fields MiSTerFin actually displays instead of expensive per-item counts it never shows, and added Music Videos as a fully supported library type — artwork, year, runtime, watched and resume state, video details. Diagnosed on a real server and tested against every library type, with focused tests that compare the complete query paths, in [#28](https://github.com/puddingstudio/MiSTerFin/pull/28)
 
 ## <a id="thanks"></a>Thanks
 
