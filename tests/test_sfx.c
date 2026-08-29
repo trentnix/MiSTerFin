@@ -43,10 +43,17 @@ int main(void)
     }
 
     /* sfx_init deliberately stops short of starting the mixer when libasound
-     * cannot be dlopen'd, which is every host this test runs on. The thread
-     * is what would normally set this and then call mix_period in a loop;
-     * here the test plays that part itself, so the mixing logic is still the
-     * thing under test rather than the device plumbing. */
+     * cannot be dlopen'd. The thread is what would normally set this and then
+     * call mix_period in a loop; here the test plays that part itself, so the
+     * mixing logic is the thing under test rather than the device plumbing.
+     *
+     * NOTE this assert assumes a host with no libasound — true on macOS and
+     * on the CI image, not on a Linux desktop with alsa-lib installed, where
+     * sfx_init really does start the mixer and this fires. Left as an assert
+     * rather than made conditional because it is also the check that the
+     * dlopen gate works at all; if it ever trips on a machine that simply has
+     * ALSA, the fix is to skip the block below (the thread is already mixing,
+     * and sfx_shutdown would free the clips the later assertions need). */
     assert(!s_running && "expected no mixer thread without libasound");
     s_running = 1;
 
