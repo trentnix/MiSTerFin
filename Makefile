@@ -42,6 +42,9 @@ test:
 	$(CC) $(CFLAGS) -o /tmp/misterfin_test_config \
 		tests/test_config.c src/jellyfin.c src/json.c
 	@mkdir -p /tmp/misterfin_test_cfgdir && cd /tmp/misterfin_test_cfgdir && /tmp/misterfin_test_config
+	$(CC) $(CFLAGS) -o /tmp/misterfin_test_jellyfin_queries \
+		tests/test_jellyfin_queries.c src/jellyfin.c src/json.c
+	@/tmp/misterfin_test_jellyfin_queries
 	$(CC) $(CFLAGS) -o /tmp/misterfin_test_sfx tests/test_sfx.c -lpthread
 	@/tmp/misterfin_test_sfx
 
