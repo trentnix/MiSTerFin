@@ -1608,10 +1608,16 @@ static void browse_cover_load(void)
  * already in the top-right panel, and a 2:3 poster stretched across this rect
  * looks like exactly what it is.
  *
- * Held at under a third strength beneath the same top-down wash the info
+ * Held well under full strength beneath the same top-down wash the info
  * screen uses, because unlike that screen this one has a list of text over it
  * and legibility wins. */
-#define HERO_ALPHA  77            /* out of 255, before the wash */
+/* 110, matching GRID_ALPHA: the mosaic background settled on that figure
+ * after 40 and then 65 were both reported too faint, and this is the same
+ * judgement about the same kind of picture behind the same UI. 77 was tried
+ * first here and raised on that same feedback. The headroom is there for it —
+ * list rows draw in COL_ITEM (0xCC), and a real backdrop averages well below
+ * white, so even the un-washed top of the rect stays clear of the text. */
+#define HERO_ALPHA  110           /* out of 255, before the wash */
 /* 640, not fb->width: this is the widest the rect is ever drawn (the narrow
  * HDMI box is 480), one fetch width keeps one cache key, and the prefetch
  * thread has no FBDev to ask anyway. Same figure info_assets_load already
