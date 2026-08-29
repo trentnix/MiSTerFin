@@ -1601,12 +1601,118 @@ static void browse_cover_load(void)
     g_browse_cover_item_id[sizeof(g_browse_cover_item_id) - 1] = '\0';
 }
 
+/* ── browse hero backdrop ─────────────────────────────────────────────────
+ * The selected row's wide artwork, behind the list, in the same rect the info
+ * screen leads with — so drilling into a title continues a picture already on
+ * screen instead of replacing one. Deliberately not the poster: that is
+ * already in the top-right panel, and a 2:3 poster stretched across this rect
+ * looks like exactly what it is.
+ *
+ * Held at under a third strength beneath the same top-down wash the info
+ * screen uses, because unlike that screen this one has a list of text over it
+ * and legibility wins. */
+#define HERO_ALPHA  77            /* out of 255, before the wash */
+/* 640, not fb->width: this is the widest the rect is ever drawn (the narrow
+ * HDMI box is 480), one fetch width keeps one cache key, and the prefetch
+ * thread has no FBDev to ask anyway. Same figure info_assets_load already
+ * uses for the info screen's own backdrop. */
+#define HERO_DL_W   640
+
+/* (3*height)/4 is the closed-form pixel height for a 16:9-DAR image spanning
+ * the full width on this platform's non-square pixels — the derivation
+ * draw_info documents for its own backdrop. A Jellyfin backdrop is 16:9, so
+ * it lands in this rect undistorted and needs no cropping. */
+static int hero_rect_h(FBDev *fb) { return (3 * fb->height) / 4; }
+
+static uint8_t *g_hero_px = NULL;     /* pre-composed, destination-sized, malloc'd */
+static int      g_hero_w = 0, g_hero_h = 0;
+static char     g_hero_item_id[JF_ID_LEN] = "";
+
+/* 'h' prefix so a hero and a cover for the same item can't collide in the one
+ * cache directory, plus the fetch width for the same reason cover_cache_path
+ * carries it. */
+static void hero_cache_path(const char *item_id, const char *tag, char *out, size_t outsz)
+{
+    char safe[JF_ID_LEN + 12];
+    size_t j = 0;
+    for (size_t i = 0; item_id[i] && j < JF_ID_LEN; i++) {
+        char c = item_id[i];
+        safe[j++] = isalnum((unsigned char)c) ? c : '_';
+    }
+    for (size_t i = 0; tag[i] && i < 6 && j < sizeof(safe) - 1; i++) {
+        char c = tag[i];
+        safe[j++] = isalnum((unsigned char)c) ? c : '_';
+    }
+    safe[j] = '\0';
+    snprintf(out, outsz, COVER_CACHE_DIR "/h%s_w%d.img", safe, HERO_DL_W);
+}
+
+/* Mirror of cover_fetch_to_cache — same tmp-then-rename inside the cache dir
+ * so the main thread never reads a half-written file. */
+static void hero_fetch_to_cache(const char *img_id, const char *tag, const char *item_id)
+{
+    if (!tag[0] || !img_id[0]) return;
+    char cpath[176];
+    hero_cache_path(item_id, tag, cpath, sizeof(cpath));
+    if (access(cpath, F_OK) == 0) return;
+
+    char tmp[192];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", cpath);
+    mkdir(COVER_CACHE_DIR, 0755);
+    if (jf_download_item_image(&g_cfg, img_id, "Backdrop/0", tag, HERO_DL_W, tmp)) {
+        if (rename(tmp, cpath) != 0) unlink(tmp);
+    } else {
+        unlink(tmp);
+    }
+}
+
+/* The item id whose backdrop the current selection wants, or "" if none.
+ * Gated only on the tag being there: parse_item_fields already falls back to
+ * the parent's backdrop, which is what gives every episode of a series the
+ * series' artwork. */
+static const char *browse_hero_wanted_id(void)
+{
+    JfItem *it = (g_item_count > 0) ? &g_items[g_sel] : NULL;
+    return (it && it->backdrop_tag[0]) ? it->id : "";
+}
+
+/* Same SD-cache-only rule as browse_cover_load: never a network fetch on the
+ * main thread, so scrolling can't freeze. An uncached backdrop simply leaves
+ * the background black until the prefetch writes it and the next redraw picks
+ * it up. */
+static void browse_hero_load(FBDev *fb)
+{
+    JfItem *it = (g_item_count > 0) ? &g_items[g_sel] : NULL;
+    const char *want = browse_hero_wanted_id();
+    int dh = hero_rect_h(fb);
+
+    if (g_hero_px && g_hero_h == dh && strcmp(g_hero_item_id, want) == 0) return;
+
+    if (g_hero_px) { free(g_hero_px); g_hero_px = NULL; }
+    g_hero_w = g_hero_h = 0;
+    g_hero_item_id[0] = '\0';
+    if (want[0] == '\0') return;
+
+    char cpath[176];
+    hero_cache_path(it->id, it->backdrop_tag, cpath, sizeof(cpath));
+    int w = 0, h = 0;
+    uint8_t *px = load_image_keep(cpath, &w, &h);
+    if (!px) return;
+    g_hero_px = compose_backdrop_wash(px, w, h, fb->width, dh, HERO_ALPHA);
+    stbi_image_free(px);
+    if (!g_hero_px) return;
+    g_hero_w = fb->width; g_hero_h = dh;
+    strncpy(g_hero_item_id, it->id, sizeof(g_hero_item_id) - 1);
+    g_hero_item_id[sizeof(g_hero_item_id) - 1] = '\0';
+}
+
 /* Background fill of the SD cover cache for the current list, so scrolling
  * reads covers off the card. Snapshots the item ids/tags (never touches
  * g_items off-thread) and stops early if the list changed under it (g_cover_gen). */
 typedef struct {
     int gen, n;
-    struct { char id[JF_ID_LEN], img_id[JF_ID_LEN], tag[JF_ID_LEN]; } items[JF_PAGE_SIZE];
+    struct { char id[JF_ID_LEN], img_id[JF_ID_LEN], tag[JF_ID_LEN],
+                  bd_id[JF_ID_LEN], bd_tag[JF_ID_LEN]; } items[JF_PAGE_SIZE];
 } CoverPrefetch;
 
 static void *cover_prefetch_thread(void *arg)
@@ -1615,6 +1721,10 @@ static void *cover_prefetch_thread(void *arg)
     for (int i = 0; i < cp->n; i++) {
         if (g_cover_gen != cp->gen) break;   /* navigated away — stop */
         cover_fetch_to_cache(cp->items[i].img_id, cp->items[i].tag, cp->items[i].id);
+        if (g_cover_gen != cp->gen) break;
+        /* After the cover, not before: the poster is the thing the user is
+         * looking straight at, the backdrop only fills in behind it. */
+        hero_fetch_to_cache(cp->items[i].bd_id, cp->items[i].bd_tag, cp->items[i].id);
     }
     free(cp);
     return NULL;
@@ -1637,6 +1747,8 @@ static void start_cover_prefetch(void)
         snprintf(cp->items[cp->n].id,     JF_ID_LEN, "%s", it->id);
         snprintf(cp->items[cp->n].img_id, JF_ID_LEN, "%s", it->image_item_id);
         snprintf(cp->items[cp->n].tag,    JF_ID_LEN, "%s", it->image_tag);
+        snprintf(cp->items[cp->n].bd_id,   JF_ID_LEN, "%s", it->backdrop_item_id);
+        snprintf(cp->items[cp->n].bd_tag,  JF_ID_LEN, "%s", it->backdrop_tag);
         cp->n++;
     }
     if (cp->n == 0) { free(cp); return; }
@@ -1991,8 +2103,15 @@ static void draw_browse(FBDev *fb)
     if (f->kind == FRAME_VIEWS && !g_root_list_mode) { draw_browse_carousel(fb); return; }
 
     browse_cover_load();
+    browse_hero_load(fb);
 
     fb_clear(fb);
+
+    /* One opaque copy — the dimming and the wash are already in its pixels
+     * (see compose_backdrop_wash). Below the rect the frame stays as fb_clear
+     * left it, which is exactly what the wash fades into. */
+    if (g_hero_px)
+        fb_blit_opaque(fb, g_hero_px, g_hero_w, g_hero_h, 0, 0, g_hero_w, g_hero_h);
 
     const char *title = f->title[0] ? f->title : "MiSTerFin";
     draw_top_bar(fb, title);

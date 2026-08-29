@@ -42,7 +42,7 @@ static void test_movie_query(void)
         "&SortBy=SortName&SortOrder=Ascending"
         "&Fields=ProductionYear,RunTimeTicks"
         "&EnableUserData=true"
-        "&ImageTypeLimit=1&EnableImageTypes=Primary&StartIndex=12&Limit=34");
+        "&ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop&StartIndex=12&Limit=34");
 }
 
 static void test_music_query(void)
@@ -58,7 +58,7 @@ static void test_music_query(void)
         "&SortBy=SortName&SortOrder=Ascending"
         "&Fields=ProductionYear,RunTimeTicks,ChildCount"
         "&EnableUserData=true"
-        "&ImageTypeLimit=1&EnableImageTypes=Primary&StartIndex=5&Limit=64");
+        "&ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop&StartIndex=5&Limit=64");
 }
 
 static void test_music_video_query(void)
@@ -75,7 +75,7 @@ static void test_music_video_query(void)
         "&SortBy=SortName&SortOrder=Ascending"
         "&Fields=ProductionYear,RunTimeTicks"
         "&EnableUserData=true"
-        "&ImageTypeLimit=1&EnableImageTypes=Primary&StartIndex=7&Limit=50");
+        "&ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop&StartIndex=7&Limit=50");
 }
 
 static void test_standard_query(void)
@@ -87,7 +87,7 @@ static void test_standard_query(void)
         "&SortBy=SortName&SortOrder=Ascending"
         "&Fields=ProductionYear,RunTimeTicks,ChildCount,RecursiveItemCount"
         "&EnableUserData=true"
-        "&ImageTypeLimit=1&EnableImageTypes=Primary&StartIndex=0&Limit=128";
+        "&ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop&StartIndex=0&Limit=128";
 
     jf_build_items_path(&cfg, "tv-view", "tvshows", 0, 128,
                         path, sizeof(path));
@@ -115,7 +115,7 @@ static void test_input_normalization(void)
         "&SortBy=SortName&SortOrder=Ascending"
         "&Fields=ProductionYear,RunTimeTicks,ChildCount"
         "&EnableUserData=true"
-        "&ImageTypeLimit=1&EnableImageTypes=Primary&StartIndex=0&Limit=9");
+        "&ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop&StartIndex=0&Limit=9");
 }
 
 static void test_collection_item_types(void)

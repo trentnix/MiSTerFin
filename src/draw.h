@@ -62,4 +62,11 @@ void draw_spinner_frame(FBDev *fb, int frame_idx);
 void blit_fit_centered(FBDev *fb, const uint8_t *src, int sw, int sh,
                        int cx, int cy, int max_w, int max_h, uint8_t alpha);
 
+/* Pre-composes a backdrop dimmed to `alpha` under a top-down darkening wash,
+ * at destination size, for callers that would otherwise redo two full-width
+ * blends every frame. Caller owns (and free()s) the result. Only valid where
+ * the destination was just cleared to black — see the implementation. */
+uint8_t *compose_backdrop_wash(const uint8_t *src, int sw, int sh,
+                               int dw, int dh, uint8_t alpha);
+
 #endif

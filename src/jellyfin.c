@@ -1242,7 +1242,13 @@ static void parse_total_count(const JsonDoc *doc, int64_t *total_out)
 }
 
 /* Builds the paginated item-list path for a library or folder, selecting the
- * fields and traversal rules appropriate to its collection type. Overview is
+ * fields and traversal rules appropriate to its collection type.
+ *
+ * EnableImageTypes carries Backdrop as well as Primary because the browse
+ * list draws the selected row's backdrop behind itself (see main.c's hero
+ * comment) and needs the tag to build that URL. One image tag per row, unlike
+ * the count fields this function is otherwise careful about — those cost the
+ * server a query each, a tag costs it a column. Overview is
  * deliberately omitted because browse rows never display it. The info screen
  * fetches it separately through jf_get_item_details(). */
 void jf_build_items_path(const JfConfig *cfg, const char *parent_id,
@@ -1264,7 +1270,7 @@ void jf_build_items_path(const JfConfig *cfg, const char *parent_id,
             "&SortBy=SortName&SortOrder=Ascending"
             "&Fields=ProductionYear,RunTimeTicks"
             "&EnableUserData=true"
-            "&ImageTypeLimit=1&EnableImageTypes=Primary&StartIndex=%d&Limit=%d",
+            "&ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop&StartIndex=%d&Limit=%d",
             cfg->user_id, safe_parent, start_index, max);
     /* Music-video libraries use the same flat browsing model as movies.
      * Search recursively and filter to MusicVideo so intermediate folders do
@@ -1275,7 +1281,7 @@ void jf_build_items_path(const JfConfig *cfg, const char *parent_id,
             "&SortBy=SortName&SortOrder=Ascending"
             "&Fields=ProductionYear,RunTimeTicks"
             "&EnableUserData=true"
-            "&ImageTypeLimit=1&EnableImageTypes=Primary&StartIndex=%d&Limit=%d",
+            "&ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop&StartIndex=%d&Limit=%d",
             cfg->user_id, safe_parent, start_index, max);
     /* Music keeps MiSTerFin's artist -> album -> track hierarchy, so list
      * direct children instead of flattening the library recursively. Keep
@@ -1287,7 +1293,7 @@ void jf_build_items_path(const JfConfig *cfg, const char *parent_id,
             "/Items?userId=%s&ParentId=%s&SortBy=SortName&SortOrder=Ascending"
             "&Fields=ProductionYear,RunTimeTicks,ChildCount"
             "&EnableUserData=true"
-            "&ImageTypeLimit=1&EnableImageTypes=Primary&StartIndex=%d&Limit=%d",
+            "&ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop&StartIndex=%d&Limit=%d",
             cfg->user_id, safe_parent, start_index, max);
     /* TV and other collection types keep the standard direct-child query.
      * Series rows use ChildCount for seasons and RecursiveItemCount for
@@ -1299,7 +1305,7 @@ void jf_build_items_path(const JfConfig *cfg, const char *parent_id,
             "/Items?userId=%s&ParentId=%s&SortBy=SortName&SortOrder=Ascending"
             "&Fields=ProductionYear,RunTimeTicks,ChildCount,RecursiveItemCount"
             "&EnableUserData=true"
-            "&ImageTypeLimit=1&EnableImageTypes=Primary&StartIndex=%d&Limit=%d",
+            "&ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop&StartIndex=%d&Limit=%d",
             cfg->user_id, safe_parent, start_index, max);
 }
 
@@ -1468,7 +1474,7 @@ int jf_list_episodes(const JfConfig *cfg, const char *series_id, const char *sea
     snprintf(path, sizeof(path),
         "/Shows/%s/Episodes?seasonId=%s&userId=%s"
         "&Fields=RunTimeTicks&EnableUserData=true"
-        "&ImageTypeLimit=1&EnableImageTypes=Primary&StartIndex=%d&Limit=%d",
+        "&ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop&StartIndex=%d&Limit=%d",
         safe_series, safe_season, cfg->user_id, start_index, max);
 
     JfResponse r;

@@ -47,6 +47,8 @@ test:
 	@/tmp/misterfin_test_jellyfin_queries
 	$(CC) $(CFLAGS) -o /tmp/misterfin_test_sfx tests/test_sfx.c -lpthread
 	@/tmp/misterfin_test_sfx
+	$(CC) $(CFLAGS) -o /tmp/misterfin_test_hero tests/test_hero.c src/draw.c
+	@/tmp/misterfin_test_hero
 
 # -lm: stb_image needs pow(), the Toasty sprite paths need sinf/sincosf. The
 # ARM build gets libm folded into libc by zig's target libc, so only the host

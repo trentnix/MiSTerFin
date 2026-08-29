@@ -1,6 +1,7 @@
 /* Drawing primitives — bitmap-font text rendering and the aspect-corrected
  * blit. Extracted verbatim from main.c; see draw.h for the interface. */
 
+#include <stdlib.h>
 #include <string.h>
 #include "draw.h"
 #include "font8x8.h"
@@ -220,4 +221,47 @@ void draw_spinner_frame(FBDev *fb, int frame_idx)
     fb_fill_rect_alpha(fb, dx, dy, SPINNER_SIZE, SPINNER_SIZE, 0, 0, 0, 255);
     if (frame_idx % 2 == 0)
         fb_fill_rect_alpha(fb, dx, dy, SPINNER_SIZE, SPINNER_SIZE, 0x40, 0xE0, 0x40, 255);
+}
+
+/* Bakes "draw this image at `alpha` over black, then darken it by a top-down
+ * wash that reaches full black at the bottom row" into a standalone,
+ * destination-sized RGBA buffer. Returns malloc'd memory the caller owns, or
+ * NULL if the inputs are degenerate or the allocation fails.
+ *
+ * The point is doing it ONCE per image instead of on every redraw. It is
+ * correct only because the caller composes onto a frame just cleared to pure
+ * black: blending a pixel at alpha a over black is exactly pixel*a/255, and
+ * the wash is one more such per-row factor. Both are properties of the
+ * pixels, not of the frame, so replaying the result collapses to a single
+ * opaque copy — see fb_blit_opaque's own comment, which cites this class of
+ * trick as the app's biggest single CPU saving.
+ *
+ * Nearest-neighbour, matching fb_blit, so pre-scaling here changes nothing
+ * about how the picture reads versus drawing it straight to the screen. */
+uint8_t *compose_backdrop_wash(const uint8_t *src, int sw, int sh,
+                               int dw, int dh, uint8_t alpha)
+{
+    if (!src || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return NULL;
+    uint8_t *out = (uint8_t *)malloc((size_t)dw * dh * 4);
+    if (!out) return NULL;
+
+    for (int y = 0; y < dh; y++) {
+        int sy = y * sh / dh;
+        /* Top row keeps the full `alpha`, bottom row reaches black, so the
+         * artwork blends into the cleared frame below it with no visible
+         * seam. dh == 1 is the degenerate case: the single row IS the bottom
+         * one, so it washes to black rather than keeping alpha. */
+        int wash = (dh > 1) ? (255 - y * 255 / (dh - 1)) : 0;
+        int k    = (int)alpha * wash;                /* 0 .. 255*255 */
+        const uint8_t *srow = src + (size_t)sy * sw * 4;
+        uint8_t *drow = out + (size_t)y * dw * 4;
+        for (int x = 0; x < dw; x++) {
+            const uint8_t *sp = srow + (size_t)(x * sw / dw) * 4;
+            uint8_t *dp = drow + (size_t)x * 4;
+            for (int c = 0; c < 3; c++)
+                dp[c] = (uint8_t)((sp[c] * k) / (255 * 255));
+            dp[3] = 255;                             /* replay is an opaque copy */
+        }
+    }
+    return out;
 }
