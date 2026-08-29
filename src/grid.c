@@ -19,7 +19,6 @@
  * is deliberate and safe; keep the two in sync). */
 #define GRID_POSTER_TMP    "/tmp/misterfin_poster.img"
 #define GRID_POSTER_TMP_BG "/tmp/misterfin_poster_bg.img"
-#define GRID_CACHE_DIR     "/media/fat/misterfin/gridcache"
 
 /* Dimmed cover-art grid behind the carousel, tiling whatever the active
  * library actually contains — one library's worth of covers cached at a

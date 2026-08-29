@@ -49,6 +49,8 @@ test:
 	@/tmp/misterfin_test_sfx
 	$(CC) $(CFLAGS) -o /tmp/misterfin_test_hero tests/test_hero.c src/draw.c
 	@/tmp/misterfin_test_hero
+	$(CC) $(CFLAGS) -o /tmp/misterfin_test_cache_sweep tests/test_cache_sweep.c src/util.c
+	@/tmp/misterfin_test_cache_sweep
 
 # -lm: stb_image needs pow(), the Toasty sprite paths need sinf/sincosf. The
 # ARM build gets libm folded into libc by zig's target libc, so only the host

@@ -15,6 +15,11 @@
  * the app (it's main.c's global). */
 void grid_init(const JfConfig *cfg);
 
+/* Where the persisted mosaic caches live. In the header rather than grid.c
+ * because startup also sweeps it for entries under a superseded filename key
+ * (see cache_sweep_superseded). */
+#define GRID_CACHE_DIR "/media/fat/misterfin/gridcache"
+
 /* Makes `view`'s mosaic the active one, populating its cache slot first if
  * this is the first visit (blocking: disk cache, else network fetch with a
  * corner spinner on `fb`). Main thread only. */

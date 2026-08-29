@@ -1601,6 +1601,35 @@ static void browse_cover_load(void)
     g_browse_cover_item_id[sizeof(g_browse_cover_item_id) - 1] = '\0';
 }
 
+/* Reclaims cover/grid cache entries written under an older filename key —
+ * raising a fetch width leaves the previous files unreachable and stranded on
+ * the card (see cache_sweep_superseded, which explains why this needs no
+ * marker file and cannot touch the live cache).
+ *
+ * Off the main thread and detached: unlink is slow here (exFAT mounted sync)
+ * and this must not delay the first frame. Nothing waits on the result, and
+ * being killed mid-sweep at exit just leaves the remainder for the next
+ * launch. */
+static void *cache_sweep_thread(void *arg)
+{
+    (void)arg;
+    int n  = cache_sweep_superseded(COVER_CACHE_DIR, ".img", "_w");
+    n     += cache_sweep_superseded(GRID_CACHE_DIR,  ".dat", "_w");
+    /* Only when it did something — on every launch after the first there is
+     * nothing to find, and a line saying so each time is noise. */
+    if (n > 0) jf_log_line("cache: reclaimed %d entries from a superseded key", n);
+    return NULL;
+}
+
+static void start_cache_sweep(void)
+{
+    pthread_t t; pthread_attr_t at;
+    pthread_attr_init(&at);
+    pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+    pthread_create(&t, &at, cache_sweep_thread, NULL);   /* failure is a no-op */
+    pthread_attr_destroy(&at);
+}
+
 /* ── browse hero backdrop ─────────────────────────────────────────────────
  * The selected row's wide artwork, behind the list, in the same rect the info
  * screen leads with — so drilling into a title continues a picture already on
@@ -5051,6 +5080,7 @@ int main(int argc, char **argv)
         const char *sfx_dir = getenv("MISTERFIN_SFX_DIR");
         sfx_init(sfx_dir && *sfx_dir ? sfx_dir : SFX_DIR);
     }
+    start_cache_sweep();
 
     signal(SIGTERM,  on_signal);
     signal(SIGINT,   on_signal);
