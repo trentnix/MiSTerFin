@@ -362,7 +362,7 @@ Thanks to **[@trentnix](https://github.com/trentnix)** for the library fixes and
 - **UI sounds** — a click as the selection moves, a chime when something is chosen. Mixed in-process by a background thread rather than a process spawned per keypress, so the click lands on the button press instead of a beat after it. The MiSTer routes Linux audio through a single non-shareable FPGA pipe, so the sounds step aside while a film or track plays and return when it ends. `touch /media/fat/misterfin/no-sfx` disables them without a rebuild
 - **The browse selection glides to its row** instead of jumping to it
 - **The home carousel pushes sideways between libraries** instead of blinking through black. The sideways push was always there — the cross-fade was hiding the first half of it behind the blink
-- Sharper cover art in two places that were quietly asking the server for less than they draw: the home carousel's mosaic background and the info screen's logo. Both caches re-fetch once, in the background, at the new size
+- Sharper cover art in two places that were quietly asking the server for less than they draw: the home carousel's mosaic background and the info screen's logo. Both caches re-fetch once, in the background, at the new size — and the superseded files are cleaned off the card automatically on first launch, so there's nothing to tidy up by hand
 
 ### <a id="v1-0-1"></a>v1.0.1
 - Fixed video/music playback failing on an `https://` Jellyfin server — the bundled mplayer's FFmpeg has no TLS support, so the stream is now fetched with curl (which already handles HTTPS for every other request) into a FIFO and handed to mplayer that way. Plain `http://` setups are unaffected
