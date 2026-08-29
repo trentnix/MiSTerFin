@@ -11,3 +11,7 @@ __pycache__/
 .DS_Store
 .claude/
 local-preview.png
+# Object files: `zig cc -c` writes these into the repo root when it is used
+# directly for a per-file warning check (CFLAGS_ARM carries no -Wall, so that
+# is worth doing), and they are trivially easy to sweep up with `git add -A`.
+*.o
