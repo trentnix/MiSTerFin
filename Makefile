@@ -1,4 +1,4 @@
-SRCS = src/main.c src/fb.c src/ddr.c src/grid.c src/visualizers.c src/jellyfin.c src/json.c src/session.c src/subtitles.c src/update.c src/input.c src/util.c src/draw.c src/screenshot.c
+SRCS = src/main.c src/fb.c src/ddr.c src/grid.c src/visualizers.c src/jellyfin.c src/json.c src/session.c src/subtitles.c src/update.c src/input.c src/util.c src/draw.c src/screenshot.c src/sfx.c
 
 TARGET     = misterfin
 TARGET_ARM = misterfin-arm
@@ -42,6 +42,8 @@ test:
 	$(CC) $(CFLAGS) -o /tmp/misterfin_test_config \
 		tests/test_config.c src/jellyfin.c src/json.c
 	@mkdir -p /tmp/misterfin_test_cfgdir && cd /tmp/misterfin_test_cfgdir && /tmp/misterfin_test_config
+	$(CC) $(CFLAGS) -o /tmp/misterfin_test_sfx tests/test_sfx.c -lpthread
+	@/tmp/misterfin_test_sfx
 
 # -lm: stb_image needs pow(), the Toasty sprite paths need sinf/sincosf. The
 # ARM build gets libm folded into libc by zig's target libc, so only the host

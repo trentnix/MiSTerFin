@@ -38,6 +38,7 @@
 #include "input.h"
 #include "draw.h"
 #include "screenshot.h"
+#include "sfx.h"
 #include "util.h"
 #include "grid.h"
 #include "visualizers.h"
@@ -57,6 +58,9 @@
  * main thread, so no scroll freeze and no blank-then-appear. A background
  * thread (cover_prefetch_thread) fills the cache for the current list;
  * COVER_TMP_BG is that thread's own download scratch path. */
+/* UI click/confirm clips. Same directory screenshot.c's shutter.wav lives in,
+ * and already deployed by the Makefile and copied by the in-app updater. */
+#define SFX_DIR      "/media/fat/misterfin/sfx"
 #define COVER_CACHE_DIR "/media/fat/misterfin/covercache"
 #define COVER_TMP_BG   "/tmp/misterfin_cover_bg.img"
 #define CRASH_LOG    "/media/fat/misterfin/crash.log"
@@ -4830,6 +4834,13 @@ int main(int argc, char **argv)
 
     srand((unsigned)time(NULL));   /* for the About screen's starfield */
     grid_init(&g_cfg);             /* just stores the pointer — config itself loads below */
+    /* Before fb_open and the config load on purpose: sfx_init only reads two
+     * files and starts a thread, and doing it here means the very first
+     * keypress on the setup screen already clicks. Never fatal — see sfx.h. */
+    {
+        const char *sfx_dir = getenv("MISTERFIN_SFX_DIR");
+        sfx_init(sfx_dir && *sfx_dir ? sfx_dir : SFX_DIR);
+    }
 
     signal(SIGTERM,  on_signal);
     signal(SIGINT,   on_signal);
@@ -5614,6 +5625,38 @@ int main(int argc, char **argv)
         }
         }
 
+        /* One place for the UI sounds rather than a sfx_play() in each of the
+         * dozen input branches above: what a click actually means is "the
+         * selection moved", and that is a thing to observe once per frame
+         * instead of asserting from every path that might have caused it.
+         * Keyed on the pid as well as the state because a player that fails
+         * to start cleanly drops the app back into the browse list while the
+         * process is still alive, and that is precisely the moment not to
+         * reach for the sound card — on this device it is not shareable at
+         * all (see sfx.c). The in-player track/subtitle menu keeps its
+         * selection in a local, so it stays silent for now.
+         *
+         * `primed` suppresses the very first iteration: was_sel starts at 0
+         * and the real selection may not be, which would otherwise click
+         * once on its own at startup. */
+        sfx_set_enabled(g_player_pid <= 0 &&
+                        state != STATE_PLAYING && state != STATE_PLAYING_AUDIO);
+        {
+            static int primed, was_depth, was_sel;
+            static AppState was_state;   /* not int — AppState is unsigned */
+            if (primed) {
+                if (inp & INP_A)
+                    sfx_play(SFX_CONFIRM);
+                else if (state == was_state && g_stack_depth == was_depth &&
+                         g_sel != was_sel)
+                    sfx_play(SFX_NAV);
+            }
+            primed    = 1;
+            was_state = state;
+            was_depth = g_stack_depth;
+            was_sel   = g_sel;
+        }
+
         if (g_seek_fire_at > 0.0 && loop_now >= g_seek_fire_at && playing) {
             double accum = g_seek_accum;
             g_seek_accum = 0.0;
@@ -5645,6 +5688,8 @@ int main(int argc, char **argv)
     if (qc_running) { pthread_join(qc_tid, NULL); qc_running = 0; }
 
     bgm_resume();
+    /* Before jf_log_close(): the mixer thread logs on its way out. */
+    sfx_shutdown();
     jf_log_close();
     player_stop();
     info_assets_free();
