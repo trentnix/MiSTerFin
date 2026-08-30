@@ -231,6 +231,17 @@ def stop_process(process: subprocess.Popen[bytes]) -> None:
         process.wait()
 
 
+def child_environment(width: int, height: int, frame_path: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    env["MISTERFIN_FB"] = f"{width}x{height}"
+    env["MISTERFIN_FRAME_OUT"] = str(frame_path)
+    env["MISTERFIN_STDIN"] = "1"
+    env.setdefault("MISTERFIN_CACHE_ROOT", "/tmp/misterfin-cache")
+    env.pop("MISTERFIN_KEYS", None)
+    env.pop("MISTERFIN_KEYS_HOLD", None)
+    return env
+
+
 def run(args: argparse.Namespace) -> int:
     if "ghostty" not in os.environ.get("TERM", "").lower() and not args.force:
         print("This viewer requires Ghostty (expected TERM=xterm-ghostty).", file=sys.stderr)
@@ -272,12 +283,7 @@ def run(args: argparse.Namespace) -> int:
     try:
         with tempfile.TemporaryDirectory(prefix="misterfin-ghostty-") as temp_dir:
             frame_path = Path(temp_dir) / "frame.raw"
-            env = os.environ.copy()
-            env["MISTERFIN_FB"] = f"{width}x{height}"
-            env["MISTERFIN_FRAME_OUT"] = str(frame_path)
-            env["MISTERFIN_STDIN"] = "1"
-            env.pop("MISTERFIN_KEYS", None)
-            env.pop("MISTERFIN_KEYS_HOLD", None)
+            env = child_environment(width, height, frame_path)
 
             with args.log.open("wb") as log, open("/dev/tty", "wb", buffering=0) as tty:
                 presenter = GhosttyPresenter(tty, width, height)

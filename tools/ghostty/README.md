@@ -23,6 +23,8 @@ Keys match the desktop harness:
 
 The helper writes MiSTerFin's stdout and stderr to `/tmp/misterfin-ghostty.log` so terminal output cannot corrupt the image. Pass `--log PATH` to choose another location.
 
+Artwork is cached under `/tmp/misterfin-cache` by default. Set `MISTERFIN_CACHE_ROOT` before launching the helper to use another location.
+
 Ghostty must report `TERM=xterm-ghostty`. The `--force` option permits another terminal that implements the Kitty graphics protocol.
 
 The viewer double-buffers terminal images to avoid flicker. It uploads a complete frame under an alternate image ID, places the new frame over the current frame, and only then deletes the old frame. MiSTerFin's 640x240 and 640x288 framebuffers use non-square CRT pixels, so the viewer fits them into a physical 4:3 rectangle using the terminal's cell geometry. The viewer caps presentation at 20 FPS by default and skips duplicate frames. Change the cap with `--fps NUMBER`. This cap only affects the terminal preview. It does not change MiSTerFin's own frame loop.

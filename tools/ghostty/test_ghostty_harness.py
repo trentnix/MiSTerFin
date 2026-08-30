@@ -9,6 +9,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 MODULE_PATH = Path(__file__).with_name("ghostty_harness.py")
@@ -111,6 +112,18 @@ class FrameReadTests(unittest.TestCase):
             self.assertIsNone(HARNESS.read_complete_frame(path, 5))
             path.write_bytes(b"bad")
             self.assertIsNone(HARNESS.read_complete_frame(path, 5))
+
+
+class ChildEnvironmentTests(unittest.TestCase):
+    def test_desktop_cache_root_is_set_by_default(self):
+        with patch.dict("os.environ", {}, clear=True):
+            env = HARNESS.child_environment(640, 288, Path("/tmp/frame.raw"))
+        self.assertEqual(env["MISTERFIN_CACHE_ROOT"], "/tmp/misterfin-cache")
+
+    def test_explicit_cache_root_is_preserved(self):
+        with patch.dict("os.environ", {"MISTERFIN_CACHE_ROOT": "/tmp/custom-cache"}, clear=True):
+            env = HARNESS.child_environment(640, 240, Path("/tmp/frame.raw"))
+        self.assertEqual(env["MISTERFIN_CACHE_ROOT"], "/tmp/custom-cache")
 
 
 if __name__ == "__main__":
